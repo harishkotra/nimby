@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   buildEvents, emptyCorrections, mergeEvents, parseCorrections, renameEvent, splitEvent,
 } from '../src/connectTimeline.ts';
+import { pickEventHighlights } from '../src/eventHighlights.ts';
 
 const origin = Date.parse('2026-08-03T10:00:00Z');
 const hour = 3600000;
@@ -87,4 +88,34 @@ test('normalizes corrupted or duplicate saved entries', () => {
     nextId: 11,
     groups: [{ id: 'user:8', title: 'Good', members: ['one'] }, { id: 'user:10', title: 'Other', members: ['two'] }],
   });
+});
+
+test('highlights keep one scored photo per detected burst and skip references', () => {
+  const photos = [
+    candidate('first', 0, { aesthetic: .6, related: ['bridge'] }, { kind: 'photo' }),
+    candidate('bridge', .001, { related: ['winner'] }, { kind: 'photo' }),
+    candidate('winner', .002, { aesthetic: .9 }, { kind: 'selfie' }),
+    candidate('different scene', .003, { aesthetic: .7 }, { kind: 'photo' }),
+    candidate('same scene later', .5, { aesthetic: .8, related: ['winner'] }, { kind: 'photo' }),
+    candidate('exact copy in the index', .6, { aesthetic: .95 }, { kind: 'photo', id: 'winner' }),
+    candidate('screenshot', .62, { aesthetic: 1 }, { kind: 'screenshot' }),
+    candidate('document', .63, { aesthetic: 1 }, { kind: 'photo', category: 'Documents' }),
+    candidate('dismissed', .65, { aesthetic: 1 }, { kind: 'photo', decision: 'dismissed' }),
+    candidate('inaccessible', .66, { aesthetic: 1 }, { kind: 'photo', uri: null }),
+  ];
+  const [moment] = buildEvents(photos);
+  assert.deepEqual(pickEventHighlights(moment.items).map(({ photo }) => photo.id), [
+    'winner', 'different scene', 'same scene later',
+  ]);
+  assert.deepEqual(pickEventHighlights(photos).map(({ photo }) => photo.id), [
+    'winner', 'different scene', 'same scene later',
+  ]);
+});
+
+test('highlights use keeper score to break aesthetic ties and show at most ten in capture order', () => {
+  const photos = Array.from({ length: 12 }, (_, i) => candidate(String(i), i, {
+    aesthetic: .8, keeper: i / 12,
+  }, { kind: 'photo' }));
+  assert.deepEqual(pickEventHighlights(photos).map(({ photo }) => photo.id), photos.slice(2).map(({ photo }) => photo.id));
+  assert.deepEqual(pickEventHighlights([candidate('unscored', 0, { aesthetic: Number.NaN }, { kind: 'photo' })]), []);
 });

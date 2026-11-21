@@ -59,6 +59,13 @@ def run_smoke():
     assert not query(db, 'electricity')
     assert query(db, 'ahmedabad') == [1]
 
+    db.execute("UPDATE images SET aesthetic=.8, keeper=.7 WHERE id=2")
+    recall = body('fun searchMemory(', 'private fun memorySource(')
+    score_query = re.search(r'rawQuery\("""(SELECT images.id.*?)"""', recall, re.S).group(1)
+    score_query = (score_query.replace('$reviewCategory', 'images.category').replace('$from', 'FROM images')
+                   .replace('${filters.joinToString(" AND ")}', 'images.id = 2').replace('$sort', '').replace('$safeOffset', '0'))
+    assert list(db.execute(score_query))[0][9:] == (.8, .7)
+
     save = re.search(r'"""(INSERT OR REPLACE INTO photo_locations.*?)"""', MEMORY, re.S).group(1)
     db.execute(save, (25, 179.5, "content://east", "1"))
     db.execute(save, (26, -179.5, "content://west", "2"))

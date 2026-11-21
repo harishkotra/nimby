@@ -7,6 +7,8 @@ export type ConnectCandidate = {
   lat: number | null;
   lon: number | null;
   related: string[];
+  aesthetic?: number | null;
+  keeper?: number | null;
 };
 
 export type ConnectPage = { items: ConnectCandidate[]; truncated: boolean };

@@ -47,7 +47,8 @@ internal class PersonalMemory(context: Context, private val memory: GalleryMemor
             val date = item["captured"] as? Number ?: return@mapNotNull null
             val gps = locations[photo["sourceKey"]]
             mapOf("photo" to photo, "captured" to date, "place" to item["place"],
-                "lat" to gps?.first, "lon" to gps?.second, "related" to links[id].orEmpty())
+                "lat" to gps?.first, "lon" to gps?.second, "related" to links[id].orEmpty(),
+                "aesthetic" to item["aesthetic"], "keeper" to item["keeper"])
         }
         return mapOf("items" to items, "truncated" to more)
     }

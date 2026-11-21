@@ -6,6 +6,7 @@ import {
   buildEvents, emptyCorrections, mergeEvents, parseCorrections, renameEvent, splitEvent,
   type ConnectCandidate, type ConnectCorrections, type ConnectEvent, type ConnectPage,
 } from './connectTimeline';
+import { pickEventHighlights } from './eventHighlights';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
 import { ActionLink, Body, Button, color, EmptyState, ErrorText, Heading, styles } from './ui';
 
@@ -49,6 +50,7 @@ export function ConnectScreen({
   const [saving, setSaving] = useState(false);
   const write = useRef(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [showHighlights, setShowHighlights] = useState(false);
   const [mergeFrom, setMergeFrom] = useState<string | null>(null);
   const [rename, setRename] = useState<string | null>(null);
   const [split, setSplit] = useState<Set<string> | null>(null);
@@ -58,7 +60,6 @@ export function ConnectScreen({
     let live = true;
     setLoadError(false);
     setSnapshot(null);
-    setActiveId(null);
     setMergeFrom(null);
     setRename(null);
     setSplit(null);
@@ -74,6 +75,14 @@ export function ConnectScreen({
   const events = useMemo(() => buildEvents(snapshot?.items ?? [], corrections), [snapshot, corrections]);
   const active = events.find((event) => event.id === activeId);
   const merging = events.find((event) => event.id === mergeFrom);
+  const highlights = useMemo(() => showHighlights && active ? pickEventHighlights(active.items) : [], [active, showHighlights]);
+
+  useEffect(() => {
+    if (snapshot && activeId && !active) {
+      setActiveId(null);
+      setShowHighlights(false);
+    }
+  }, [active, activeId, snapshot]);
 
   useEffect(() => {
     if (!activeId && !mergeFrom) return;
@@ -81,6 +90,7 @@ export function ConnectScreen({
       if (write.current) return true;
       if (rename !== null) setRename(null);
       else if (split !== null) setSplit(null);
+      else if (showHighlights) setShowHighlights(false);
       else {
         setActiveId(null);
         setMergeFrom(null);
@@ -89,10 +99,11 @@ export function ConnectScreen({
       return true;
     });
     return () => back.remove();
-  }, [activeId, mergeFrom, rename, split]);
+  }, [activeId, mergeFrom, rename, split, showHighlights]);
 
   function showEvent(id: string | null) {
     setActiveId(id);
+    setShowHighlights(false);
     setRename(null);
     setSplit(null);
     setSaveError(false);
@@ -118,6 +129,27 @@ export function ConnectScreen({
       setSaving(false);
     }
   }
+
+  if (activeId && !snapshot && !loadError) return <View style={styles.content}>
+    <ActivityIndicator accessibilityLabel="Refreshing moment" color={color.blue} />
+  </View>;
+
+  if (active && showHighlights) return <PhotoGrid<ConnectCandidate>
+    key="event-highlights"
+    desired={2}
+    data={highlights}
+    keyExtractor={(item) => item.photo.id}
+    showsVerticalScrollIndicator={false}
+    ListHeaderComponent={<View style={layout.header}>
+      <View style={styles.row}><ActionLink label="Back to moment" run={() => setShowHighlights(false)} /></View>
+      <Heading large>Highlights</Heading>
+      <Body>{active.title} · {spanLabel(active)}</Body>
+      {!!highlights.length && <Body>{highlights.length} {highlights.length === 1 ? 'photo' : 'photos'} picked using Eye’s saved scores, with one frame per detected burst.</Body>}
+    </View>}
+    ListEmptyComponent={<EmptyState icon="image" title="No highlights for this moment yet"
+      text="Highlights need a scanned photo or selfie with an Eye score. Screenshots and documents are skipped." />}
+    renderTile={({ photo }) => <PhotoTile uri={photo.uri} label={`Open highlight ${photo.name}`} press={() => open(photo)} />}
+  />;
 
   if (active) {
     const changeSplit = (id: string) => setSplit((previous) => {
@@ -155,17 +187,20 @@ export function ConnectScreen({
               run={() => void save(splitEvent(corrections, active, split))} />
             <ActionLink label="Cancel" disabled={saving} run={() => setSplit(null)} />
           </View>
-        </> : <View style={styles.row}>
-          {!active.confirmed && <Button label="Confirm" disabled={saving} run={() => void save(renameEvent(corrections, active, active.title))} />}
-          <ActionMenu title="Edit this moment" label="More moment actions" overflow disabled={saving} options={[
-            { label: 'Rename moment', run: () => setRename(active.title) },
-            ...(active.items.length > 1 ? [{ label: 'Split moment', run: () => setSplit(new Set<string>()) }] : []),
-            ...(events.length > 1 ? [{ label: 'Merge with another moment', run: () => {
-              setMergeFrom(active.id);
-              setActiveId(null);
-            } }] : []),
-          ]} />
-        </View>}
+        </> : <>
+          <Button label="Pick highlights" disabled={saving} run={() => setShowHighlights(true)} />
+          <View style={styles.row}>
+            {!active.confirmed && <ActionLink label="Confirm moment" disabled={saving} run={() => void save(renameEvent(corrections, active, active.title))} />}
+            <ActionMenu title="Edit this moment" label="Edit moment" disabled={saving} options={[
+              { label: 'Rename moment', run: () => setRename(active.title) },
+              ...(active.items.length > 1 ? [{ label: 'Split moment', run: () => setSplit(new Set<string>()) }] : []),
+              ...(events.length > 1 ? [{ label: 'Merge with another moment', run: () => {
+                setMergeFrom(active.id);
+                showEvent(null);
+              } }] : []),
+            ]} />
+          </View>
+        </>}
       </View>}
       renderTile={({ photo }) => <PhotoTile uri={photo.uri} label={photo.name}
         selected={split ? split.has(photo.id) : undefined}

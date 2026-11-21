@@ -710,7 +710,8 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         val items = mutableListOf<Map<String, Any?>>()
         var next: Int? = null
         readableDatabase.rawQuery("""SELECT images.id, images.kind, images.confidence, images.tags,
-                $reviewCategory, images.decision, images.collection, details.ocr_text, details.place
+                $reviewCategory, images.decision, images.collection, details.ocr_text, details.place,
+                images.aesthetic, images.keeper
             $from LEFT JOIN memory_details details ON details.image_id = images.id
             WHERE ${filters.joinToString(" AND ")}
             ORDER BY $sort images.analyzed DESC, images.id DESC LIMIT 257 OFFSET $safeOffset""",
@@ -751,7 +752,9 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                     row.getString(6)?.let { add("Collection: $it") }
                 }.take(3)
                 items.add(mapOf("photo" to photo + ("sourceKey" to source.first.first.toString()),
-                    "captured" to source.second, "place" to row.getString(8), "evidence" to evidence))
+                    "captured" to source.second, "place" to row.getString(8), "evidence" to evidence,
+                    "aesthetic" to row.getDouble(9).takeUnless { row.isNull(9) },
+                    "keeper" to row.getDouble(10).takeUnless { row.isNull(10) }))
             }
         }
         return mapOf("items" to items, "next" to next)
