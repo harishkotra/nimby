@@ -1,0 +1,46 @@
+{
+  "version": 8,
+  "name": "Nimby world",
+  "glyphs": "asset://photo-map/fonts/{fontstack}/{range}.pbf",
+  "sources": {
+    "world": {
+      "type": "vector",
+      "url": "pmtiles://asset://photo-map/world.pmtiles",
+      "attribution": "© OpenStreetMap contributors"
+    },
+    "photos": {
+      "type": "geojson",
+      "data": { "type": "FeatureCollection", "features": [] }
+    }
+  },
+  "layers": [
+    { "id": "sea", "type": "background", "paint": { "background-color": "#142128" } },
+    { "id": "land", "type": "fill", "source": "world", "source-layer": "earth", "paint": { "fill-color": "#25312E" } },
+    { "id": "water", "type": "fill", "source": "world", "source-layer": "water", "paint": { "fill-color": "#142128" } },
+    { "id": "boundaries", "type": "line", "source": "world", "source-layer": "boundaries", "paint": { "line-color": "#465B55", "line-width": 0.8 } },
+    {
+      "id": "place-names", "type": "symbol", "source": "world", "source-layer": "places",
+      "filter": ["any", ["has", "name:en"], ["all", ["has", "name"], ["in", ["coalesce", ["get", "script"], "Latin"], ["literal", ["Latin", "Latn"]]]]],
+      "layout": {
+        "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+        "text-font": ["Noto Sans Regular"], "text-size": 12, "text-padding": 4, "text-max-width": 10
+      },
+      "paint": { "text-color": "#A6B9AE", "text-halo-color": "#23322C", "text-halo-width": 1 }
+    },
+    {
+      "id": "photo-pins", "type": "circle", "source": "photos",
+      "paint": {
+        "circle-radius": ["step", ["get", "count"], 15, 2, 17, 10, 20, 100, 23],
+        "circle-color": "#B6E4C9", "circle-stroke-color": "#1B2D27", "circle-stroke-width": 2
+      }
+    },
+    {
+      "id": "photo-counts", "type": "symbol", "source": "photos",
+      "layout": {
+        "text-field": ["to-string", ["get", "count"]], "text-font": ["Noto Sans Regular"],
+        "text-size": 12, "text-allow-overlap": true, "text-ignore-placement": true
+      },
+      "paint": { "text-color": "#142620" }
+    }
+  ]
+}
