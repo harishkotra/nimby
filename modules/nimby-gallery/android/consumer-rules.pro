@@ -2,3 +2,4 @@
 -keep class ai.moonshine.voice.** { *; }
 -keep class com.googlecode.tesseract.android.** { *; }
 -keep class com.googlecode.leptonica.android.** { *; }
+-keep class com.google.ai.edge.litertlm.** { *; }

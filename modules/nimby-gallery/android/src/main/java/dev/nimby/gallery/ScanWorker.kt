@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
+import com.googlecode.tesseract.android.TessBaseAPI
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -19,6 +20,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.yield
 import java.io.IOException
 import java.io.File
@@ -41,6 +44,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     @Volatile private var task: Job? = null
     @Volatile private var metadataTask: Job? = null
+    private val ocrLock = Mutex()
     @Volatile private var ocrRunning = false
     @Volatile private var locating = false
     private val locationLock = Any()
@@ -137,6 +141,16 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
         "running" to ocrRunning
     )
 
+    suspend fun readShoppingText(id: Long): String? = ocrLock.withLock {
+        val target = memory.shoppingOcrTarget(id) ?: return null
+        val uri = memory.available(id) ?: return null
+        // Automatic page layout can keep multi-line product titles together on store pages.
+        val text = ReceiptOcr(context).use { it.recognize(uri, TessBaseAPI.PageSegMode.PSM_AUTO) }
+        currentCoroutineContext().ensureActive()
+        if (!text.isNullOrBlank()) memory.saveOcr(target, text)
+        text
+    }
+
     @Synchronized
     fun requestMemoryBackfill() {
         if (task?.isCompleted == false || metadataTask?.isCompleted == false) return
@@ -167,10 +181,12 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                         if (page.isEmpty()) break
                         for (target in page) {
                             currentCoroutineContext().ensureActive()
-                            val uri = memory.available(target.id) ?: continue
-                            val text = ocr.recognize(uri)
-                            currentCoroutineContext().ensureActive()
-                            if (text != null) memory.saveOcr(target, text)
+                            ocrLock.withLock {
+                                val uri = memory.available(target.id) ?: return@withLock
+                                val text = ocr.recognize(uri)
+                                currentCoroutineContext().ensureActive()
+                                if (text != null) memory.saveOcr(target, text)
+                            }
                             yield()
                         }
                         after = page.last().id
@@ -451,6 +467,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
             progress.update { if (it.phase != "cancelled") it.copy(phase = "matching") else it }
             memory.refreshDuplicateLinks()
             finish("complete")
+            if (progress.value.analyzed > 0) runCatching { NextStepNotifications(context).offerShoppingDigest() }
         } catch (error: CancellationException) {
             finish("cancelled")
             throw error

@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type DimensionValue } from 'react-native';
 import type { Feed, Overview, Result } from './gallery';
 import { homeLeadAction } from './homeActions';
+import type { NextStepPhoto } from './nextStepFacts';
 import { PhotoTile } from './PhotoGrid';
 import { NimbyMascot } from './NimbyMascot';
 import {
@@ -19,6 +20,7 @@ type Links = {
   gallery: () => void; duplicates: () => void; archive: () => void;
   discover: (mode: Feed, category?: string) => void; recall: () => void; photoMap: () => void;
   connect: () => void; patterns: () => void; parallel: () => void; evolve: () => void;
+  nextSteps: (id?: string | null) => void;
 };
 
 function Action({ label, value, icon, run }: { label: string; value?: string; icon: IconName; run: () => void }) {
@@ -57,9 +59,10 @@ export function CoverageRing({ value, size }: { value: number | null; size: numb
   </View>;
 }
 
-export function HomeDashboard({ data, error, scan, pick, busy, previews, discovery, recentError, openPhoto, openScan, ...links }: Links & {
+export function HomeDashboard({ data, error, scan, pick, busy, previews, discovery, nextStep, recentError, openPhoto, openScan, ...links }: Links & {
   data: Overview | null; error: boolean; scan: () => void; pick: () => void; busy: boolean;
-  previews: Result[]; discovery: Result | null; recentError: boolean; openPhoto: (item: Result) => void; openScan: (id: string) => void;
+  previews: Result[]; discovery: Result | null; nextStep: NextStepPhoto | null; recentError: boolean;
+  openPhoto: (item: Result) => void; openScan: (id: string) => void;
 }) {
   const activity = data?.history.find((record) => record.finished != null);
   const photos = previews.filter((item) => item.uri).slice(0, 3);
@@ -109,6 +112,18 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, discove
         </View>
       </Pressable>
     </View>}
+    {nextStep?.photo.uri && <View style={layout.section}>
+      <SectionTitle title="Next steps" action="See all" run={() => links.nextSteps()} />
+      <Pressable accessibilityRole="button" onPress={() => links.nextSteps(nextStep.photo.id)}
+        style={({ pressed }) => [layout.nextStep, pressed && styles.faded]}>
+        <Thumbnail uri={nextStep.photo.uri} style={layout.nextStepThumb} />
+        <View style={layout.flex}>
+          <Text style={layout.actionName}>{nextStep.kind === 'shopping' ? 'Still considering this?' : 'Follow up on a receipt'}</Text>
+          <Body>{nextStep.state === 'delivered' ? 'Reminder ready' : nextStep.kind === 'shopping' ? 'Revisit a saved product' : 'Review, file, or set a reminder'}</Body>
+        </View>
+        <Icon name="chevron" size={18} tint={color.muted} />
+      </Pressable>
+    </View>}
     {data && (coverage != null || awaiting != null) && <View style={layout.coverageStrip}>
       <View style={styles.between}>
         <Text style={layout.stripTitle}>{count(data.analyzed)} of {count(data.accessible)} photos analyzed</Text>
@@ -143,9 +158,10 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, discove
   </ScrollView>;
 }
 
-export function InsightsScreen({ data, error, ...links }: Links & { data: Overview | null; error: boolean }) {
+export function InsightsScreen({ data, error, ...links }: Pick<Links, 'gallery' | 'duplicates' | 'discover' | 'archive'> & {
+  data: Overview | null; error: boolean;
+}) {
   const [details, setDetails] = useState(false);
-  const [exploreOpen, setExploreOpen] = useState(false);
   const { width } = useWindowDimensions();
   const coverage = data?.accessible == null ? null : ratio(data.analyzed, data.accessible);
   const categories = data?.categories ?? [];
@@ -221,19 +237,19 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
         run={() => links.discover('suggestions')} />
       <Action icon="archive" label="Archived photos" value={data ? `${count(data.archived)} in your archive` : undefined} run={links.archive} />
     </View>
+  </ScrollView>;
+}
+
+export function ExploreScreen(links: Pick<Links, 'nextSteps' | 'photoMap' | 'connect' | 'patterns' | 'parallel' | 'evolve'>) {
+  return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+    <View style={layout.intro}><Heading large>Explore</Heading><Body>Find connections and follow up on what you saved.</Body></View>
     <View style={layout.section}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: exploreOpen }}
-        onPress={() => setExploreOpen(!exploreOpen)} style={({ pressed }) => [layout.exploreToggle, pressed && styles.pressed]}>
-        <Heading>Explore</Heading>
-        <Icon name={exploreOpen ? 'up' : 'down'} size={18} tint={color.muted} />
-      </Pressable>
-      {exploreOpen && <>
-        <Action icon="map" label="See where photos were taken" value="Explore where your photos were taken" run={links.photoMap} />
-        <Action icon="clock" label="Timeline" value="Browse related moments" run={links.connect} />
-        <Action icon="layers" label="Discover patterns" value="See themes that show up over time" run={links.patterns} />
-        <Action icon="chevron" label="Plan from saved photos" value="Make a plan from saved photos" run={links.parallel} />
-        <Action icon="check" label="Review past choices" value="Remember what worked" run={links.evolve} />
-      </>}
+      <Action icon="bookmark" label="Shopping and receipt follow-ups" run={() => links.nextSteps()} />
+      <Action icon="map" label="See where photos were taken" run={links.photoMap} />
+      <Action icon="clock" label="Timeline" value="Browse related moments" run={links.connect} />
+      <Action icon="layers" label="Discover patterns" value="See themes that show up over time" run={links.patterns} />
+      <Action icon="chevron" label="Plan from saved photos" run={links.parallel} />
+      <Action icon="check" label="Review past choices" value="Remember what worked" run={links.evolve} />
     </View>
   </ScrollView>;
 }
@@ -247,6 +263,8 @@ const layout = StyleSheet.create({
   feature: { borderRadius: 16, overflow: 'hidden', backgroundColor: color.white },
   featurePhoto: { aspectRatio: 2.1, maxHeight: 240, backgroundColor: color.black },
   featureCaption: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
+  nextStep: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, backgroundColor: color.white, borderRadius: 16 },
+  nextStepThumb: { width: 56, height: 56, borderRadius: 10 },
   flex: { flex: 1 },
   section: { gap: 8 },
   preview: { flexDirection: 'row', gap: 8 },
@@ -278,5 +296,4 @@ const layout = StyleSheet.create({
   fill: { height: '100%', borderRadius: 8 },
   details: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingBottom: 6 },
   detail: { flexBasis: '47%', flexGrow: 1, gap: 2 },
-  exploreToggle: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
 });

@@ -16,12 +16,13 @@ internal class ReceiptOcr(private val context: Context) : AutoCloseable {
 
     // null means the source or recognizer was unavailable; an empty string is a completed recognition.
     @Synchronized
-    fun recognize(uri: Uri): String? {
+    fun recognize(uri: Uri, pageMode: Int = TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT): String? {
         return try {
             val bitmap = decode(uri)
             try {
                 val tess = engine ?: prepare().also { engine = it }
                 try {
+                    tess.setPageSegMode(pageMode)
                     tess.setImage(bitmap)
                     tess.getUTF8Text().orEmpty().trim().take(32_768)
                 } finally {
@@ -61,7 +62,6 @@ internal class ReceiptOcr(private val context: Context) : AutoCloseable {
         val tess = TessBaseAPI()
         try {
             check(tess.init(root.absolutePath, "eng", TessBaseAPI.OEM_LSTM_ONLY))
-            tess.setPageSegMode(TessBaseAPI.PageSegMode.PSM_SPARSE_TEXT)
             return tess
         } catch (failure: Throwable) {
             tess.recycle()

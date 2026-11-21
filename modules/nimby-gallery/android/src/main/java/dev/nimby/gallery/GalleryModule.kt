@@ -15,6 +15,7 @@ import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 
 class GalleryModule : Module() {
@@ -25,6 +26,10 @@ class GalleryModule : Module() {
     private val worker get() = scan.value
     private val voiceEngine = lazy { VoiceRecall(context) }
     private val personal by lazy { PersonalMemory(context, memory) }
+    private val functionGemma = lazy { FunctionGemma(context) }
+    private val productVision by lazy { ProductVision(context) }
+    private val modelInference = Mutex()
+    private val followUps by lazy { NextStepNotifications(context) }
     private val picker = PickMultipleVisualMedia()
     private var pickerPromise: Promise? = null
     @Volatile private var deletionPending = false
@@ -106,7 +111,8 @@ class GalleryModule : Module() {
 
         Function("startScan") { albums: List<String>, uris: List<String> ->
             check(!deletionPending) { "Finish Android’s deletion review before scanning." }
-            worker.start(albums, uris)
+            check(modelInference.tryLock()) { "Wait for the current suggestion before scanning." }
+            try { worker.start(albums, uris) } finally { modelInference.unlock() }
         }
         Function("scanStatus") { -> worker.status() }
         Function("controlScan") { action: String -> worker.control(action) }
@@ -125,7 +131,83 @@ class GalleryModule : Module() {
         OnActivityEntersBackground {
             if (voiceEngine.isInitialized()) voiceEngine.value.cancelRecording()
         }
-        OnActivityEntersForeground { worker.requestMemoryBackfill() }
+        OnActivityEntersForeground {
+            worker.requestMemoryBackfill()
+            appContext.backgroundCoroutineScope.launch(Dispatchers.IO) { runCatching { followUps.recover(memory) } }
+        }
+
+        AsyncFunction("nextSteps") Coroutine { id: String? ->
+            withContext(Dispatchers.IO) {
+                val items = memory.nextSteps()
+                val target = id?.takeIf { key -> items.none { (it["photo"] as Map<*, *>)["id"] == key } }
+                listOfNotNull(target?.let(memory::nextStep)) + items
+            }
+        }
+        Function("nextStepNotificationStatus") { -> followUps.status() }
+        AsyncFunction("setShoppingNotifications") Coroutine { enabled: Boolean ->
+            withContext(Dispatchers.IO) { followUps.setShopping(enabled) }
+        }
+        AsyncFunction("savePhotoFollowUp") Coroutine { id: String, action: String, due: Long ->
+            withContext(Dispatchers.IO) {
+                when (action) {
+                    "schedule" -> followUps.schedule(memory, id, due)
+                    "cancel" -> { memory.cancelFollowUp(id); followUps.stop(id) }
+                    "file" -> { memory.fileReceipt(id); followUps.stop(id) }
+                    "done", "dismissed" -> {
+                        check(memory.nextStep(id) != null) { "This photo is no longer available for follow-up." }
+                        memory.writeFollowUp(id, action)
+                        followUps.stop(id)
+                    }
+                    else -> error("Unknown follow-up action.")
+                }
+            }
+        }
+        Function("functionGemmaStatus") { -> functionGemma.value.status() }
+        AsyncFunction("installFunctionGemma") Coroutine { ->
+            withContext(Dispatchers.IO) { functionGemma.value.install() }
+        }
+        AsyncFunction("removeFunctionGemma") Coroutine { ->
+            withContext(Dispatchers.IO) { functionGemma.value.remove() }
+        }
+        AsyncFunction("readShoppingText") Coroutine { id: String ->
+            withContext(Dispatchers.IO) {
+                id.toLongOrNull()?.let { worker.readShoppingText(it) }
+            }
+        }
+        Function("productVisionStatus") { -> productVision.status() }
+        AsyncFunction("installProductVision") Coroutine { ->
+            withContext(Dispatchers.IO) { productVision.install() }
+        }
+        Function("cancelProductVisionDownload") { -> productVision.cancelDownload() }
+        AsyncFunction("removeProductVision") Coroutine { ->
+            withContext(Dispatchers.IO) { productVision.remove() }
+        }
+        AsyncFunction("identifyProductImage") Coroutine { id: String ->
+            withContext(Dispatchers.IO) {
+                check(modelInference.tryLock()) { "Wait for the current suggestion to finish." }
+                try {
+                    check(worker.status()["phase"] !in listOf("preparing", "running", "matching", "paused")) {
+                        "Finish your gallery scan before using Qwen."
+                    }
+                    val imageId = id.toLongOrNull()
+                    check(imageId != null && memory.shoppingOcrTarget(imageId) != null) { "This image is no longer available." }
+                    val uri = memory.available(imageId) ?: error("This image is no longer accessible.")
+                    productVision.identify(uri)
+                } finally { modelInference.unlock() }
+            }
+        }
+        AsyncFunction("suggestNextStep") Coroutine { id: String, hasComparison: Boolean, hasReturnDate: Boolean ->
+            withContext(Dispatchers.IO) {
+                check(modelInference.tryLock()) { "Wait for the current suggestion to finish." }
+                try {
+                    check(worker.status()["phase"] !in listOf("preparing", "running", "matching", "paused")) {
+                        "Finish your gallery scan before asking FunctionGemma."
+                    }
+                    val kind = memory.nextStep(id)?.get("kind") as? String ?: return@withContext null
+                    functionGemma.value.suggest(kind, hasComparison, hasReturnDate)
+                } finally { modelInference.unlock() }
+            }
+        }
 
         AsyncFunction("requestMemoryBackfill") Coroutine { ->
             withContext(Dispatchers.IO) { worker.requestMemoryBackfill() }
@@ -194,7 +276,8 @@ class GalleryModule : Module() {
         AsyncFunction("resumeInterrupted") Coroutine { ->
             withContext(Dispatchers.IO) {
                 check(!deletionPending) { "Finish Android’s deletion review before scanning." }
-                worker.resumeInterrupted()
+                check(modelInference.tryLock()) { "Wait for the current suggestion before scanning." }
+                try { worker.resumeInterrupted() } finally { modelInference.unlock() }
             }
         }
         AsyncFunction("excludeAlbum") Coroutine { id: String, name: String, excluded: Boolean ->

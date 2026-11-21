@@ -12,7 +12,7 @@ internal data class PendingOcr(val id: Long, val fingerprint: String)
 internal data class PendingLocation(val uri: Uri, val version: String, val after: Long)
 
 internal const val OCR_ELIGIBLE = """(images.kind IN ('screenshot','receipt','document','whiteboard') OR
-    images.category IN ('Screenshots','Receipts','Documents','Notes and whiteboards'))"""
+    images.category IN ('Screenshots','Receipts','Documents','Notes and whiteboards','Shopping references'))"""
 
 internal fun createMemorySchema(db: SQLiteDatabase) {
     db.execSQL("""CREATE TABLE memory_details (

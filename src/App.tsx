@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppState, BackHandler, Keyboard, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { AppState, BackHandler, Keyboard, Linking, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { DialogProvider, useDialog } from './Dialogs';
 import { BottomTabs } from './BottomTabs';
 import { Discover, PhotoDetail, Revisit } from './Discover';
-import { HomeDashboard, InsightsScreen } from './Dashboard';
+import { ExploreScreen, HomeDashboard, InsightsScreen } from './Dashboard';
 import { DuplicatesScreen } from './DuplicatesScreen';
 import { GalleryScreen } from './GalleryScreen';
 import { ArchiveScreen } from './ArchiveScreen';
@@ -16,6 +16,8 @@ import { parseCorrections } from './connectTimeline';
 import { PatternsScreen } from './PatternsScreen';
 import { ParallelScreen, type ParallelChoice } from './ParallelScreen';
 import { EvolveScreen } from './EvolveScreen';
+import { NextStepsScreen } from './NextStepsScreen';
+import type { NextStepPhoto } from './nextStepFacts';
 import { appendChoice, photoFeedbackScores, preferredActions, readEvolveState } from './evolve';
 import { applyRecallFeedback } from './recallFeedback';
 import type { RecallSearch } from './recallQuery';
@@ -23,10 +25,11 @@ import { native, openSettings, requestGalleryAccess, scanActive, type Access, ty
 import { NimbyMascot, mascotForScan } from './NimbyMascot';
 import { Body, Button, color, ErrorText, Heading, Icon, IconButton, type IconName, styles } from './ui';
 
-type Screen = 'Home' | 'Revisit' | 'Gallery' | 'Discover' | 'Analysis' | 'Settings' | 'Archive' | 'Insights' | 'Duplicates'
-  | 'Recall' | 'PhotoMap' | 'Connect' | 'Patterns' | 'Parallel' | 'Evolve';
+type Screen = 'Home' | 'Revisit' | 'Gallery' | 'Discover' | 'Analysis' | 'Settings' | 'Archive' | 'Explore' | 'Insights' | 'Duplicates'
+  | 'Recall' | 'PhotoMap' | 'Connect' | 'Patterns' | 'Parallel' | 'Evolve' | 'NextSteps';
 const tabs = [
   { name: 'Home', icon: 'home', label: 'Home' }, { name: 'Recall', icon: 'search', label: 'Search' },
+  { name: 'Explore', icon: 'map', label: 'Explore' },
   { name: 'Insights', icon: 'insights', label: 'Insights' }, { name: 'Archive', icon: 'archive', label: 'Archive' },
 ] as const satisfies readonly { name: Screen; icon: IconName; label: string }[];
 
@@ -75,6 +78,8 @@ function Nimby() {
   const [preferred, setPreferred] = useState<string[]>([]);
   const [recent, setRecent] = useState<Result[]>([]);
   const [discovery, setDiscovery] = useState<Result | null>(null);
+  const [nextStep, setNextStep] = useState<NextStepPhoto | null>(null);
+  const [nextStepTarget, setNextStepTarget] = useState<string | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewError, setOverviewError] = useState(false);
   const [feed, setFeed] = useState<Feed | 'scan'>('suggestions');
@@ -92,6 +97,22 @@ function Nimby() {
   const albumRequest = useRef(0);
   const navigation = useRef(screen);
   navigation.current = screen;
+
+  useEffect(() => {
+    let active = true;
+    function openNotification(url: string | null | undefined) {
+      const id = url?.match(/^nimby:\/\/next-steps\/(\d+)$/)?.[1];
+      if (!active || !id) return;
+      if (tabs.some((tab) => tab.name === navigation.current)) backTo.current = navigation.current;
+      Keyboard.dismiss();
+      setDetail(null);
+      setNextStepTarget(id);
+      setScreen('NextSteps');
+    }
+    const subscription = Linking.addEventListener('url', ({ url }) => openNotification(url));
+    void Linking.getInitialURL().then(openNotification).catch(() => {});
+    return () => { active = false; subscription.remove(); };
+  }, []);
 
   function refreshGallery(loadAlbums: boolean) {
     const current = native!.access();
@@ -173,6 +194,10 @@ function Nimby() {
     native!.revisitPicks([]).then((picks) => {
       if (live) setDiscovery(picks.find((item) => item.uri) ?? null);
     }).catch(() => { if (live) setDiscovery(null); });
+    native!.nextSteps?.(null).then((items) => {
+      if (!live) return;
+      setNextStep(items.find((item) => item.state === 'delivered') ?? items.find((item) => !item.state) ?? null);
+    }).catch(() => { if (live) setNextStep(null); });
     return () => { live = false; };
   }, [revision, screen]);
 
@@ -284,7 +309,7 @@ function Nimby() {
     } else if (screen === 'Analysis') {
       navigate(analysisBack.current);
     } else if (screen === 'Settings' || screen === 'Duplicates' || screen === 'Recall' || screen === 'PhotoMap'
-      || screen === 'Connect' || screen === 'Patterns' || screen === 'Parallel' || screen === 'Evolve') {
+      || screen === 'Connect' || screen === 'Patterns' || screen === 'Parallel' || screen === 'Evolve' || screen === 'NextSteps') {
       navigate(backTo.current);
     } else {
       navigate('Home');
@@ -307,6 +332,11 @@ function Nimby() {
     setRevision((value) => value + 1);
   }
 
+  function openNextSteps(id: string | null = null) {
+    setNextStepTarget(id);
+    navigate('NextSteps');
+  }
+
   const links = {
     gallery: () => void galleryAction('browse'),
     duplicates: () => navigate('Duplicates'),
@@ -318,6 +348,7 @@ function Nimby() {
     patterns: () => navigate('Patterns'),
     parallel: () => navigate('Parallel'),
     evolve: () => navigate('Evolve'),
+    nextSteps: openNextSteps,
   };
 
   const primary = tabs.some((tab) => tab.name === screen);
@@ -349,7 +380,7 @@ function Nimby() {
           status={native!.memoryStatus} startBackfill={native!.requestMemoryBackfill} />
       </View>}
       {screen === 'Home' && <HomeDashboard {...links} data={overview} error={overviewError} busy={busy}
-        scan={() => void galleryAction('scan')} pick={() => void pick()} previews={recent} discovery={discovery} recentError={recentError}
+        scan={() => void galleryAction('scan')} pick={() => void pick()} previews={recent} discovery={discovery} nextStep={nextStep} recentError={recentError}
         openPhoto={setDetail} openScan={(id) => openReview('scan', null, id)} />}
       {screen === 'Gallery' && <GalleryScreen access={access} albums={albums} loading={loadingAlbums} error={galleryError}
         album={album} open={setAlbum} manage={() => void galleryAction('manage')} settings={showSettings}
@@ -367,9 +398,12 @@ function Nimby() {
       {screen === 'Evolve' && <EvolveScreen revision={revision} loadState={loadEvolve} saveState={saveEvolve}
         changed={changed} loadConnectCorrections={loadCorrections} loadPatternFeedback={loadPatterns}
         resetCorrections={resetCorrections} />}
+      {screen === 'NextSteps' && <NextStepsScreen revision={revision} target={nextStepTarget} scanning={scanActive(scan)}
+        open={setDetail} changed={changed} />}
       {screen === 'Discover' && <Discover key={JSON.stringify([feed, reviewScan])} mode={feed}
         category={feedCategory} scanId={reviewScan} revision={revision} open={setDetail} changed={changed}
         openCategory={setFeedCategory} />}
+      {screen === 'Explore' && <ExploreScreen {...links} />}
       {screen === 'Insights' && <InsightsScreen {...links} data={overview} error={overviewError} />}
       {screen === 'Duplicates' && <DuplicatesScreen revision={revision} changed={() => setRevision((value) => value + 1)} />}
       {screen === 'Analysis' && <AnalysisScreen scan={scan} access={access} control={control}

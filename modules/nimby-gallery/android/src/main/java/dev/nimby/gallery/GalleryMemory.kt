@@ -20,12 +20,13 @@ internal data class Analysis(
 )
 
 internal const val ARCHIVE_WAIT_MS = 30L * 24 * 60 * 60 * 1_000
+private val SHOPPING_EVIDENCE = Regex("[$€£₹]\\s*\\d|\\b(add to (cart|bag)|buy now|product details)\\b", RegexOption.IGNORE_CASE)
 internal fun lowQuality(tags: JSONObject?): Boolean =
     listOf("unusable", "technical_flaw", "blurry").any { (tags?.optDouble(it) ?: 0.0) >= 0.9 }
 internal data class ArchivedPhoto(val uri: String, val name: String, val album: String,
     val bytes: Long, val version: String, val archived: Long, val eligible: Long)
 internal class GalleryMemory(context: Context, private val gallery: GallerySource) :
-    SQLiteOpenHelper(context, "nimby-gallery.db", null, 7) {
+    SQLiteOpenHelper(context, "nimby-gallery.db", null, 8) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -58,6 +59,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         addScanScope(db)
         createScanResults(db)
         createMemorySchema(db)
+        createFollowUpSchema(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -87,6 +89,15 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         if (oldVersion < 5) addScanScope(db)
         if (oldVersion < 6) createScanResults(db)
         if (oldVersion < 7) createMemorySchema(db)
+        if (oldVersion < 8) createFollowUpSchema(db)
+    }
+
+    private fun createFollowUpSchema(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE photo_followups (
+            image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+            state TEXT NOT NULL CHECK (state IN ('scheduled','delivered','done','dismissed')),
+            due INTEGER NOT NULL DEFAULT 0
+        )""")
     }
 
     private fun createScanResults(db: SQLiteDatabase) {
@@ -791,6 +802,85 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         } finally { db.endTransaction() }
     }
 
+    private val followUpKind = """CASE WHEN images.category = 'Receipts' OR images.kind = 'receipt'
+        THEN 'receipt' WHEN images.category = 'Shopping references' THEN 'shopping' END""".trimIndent()
+
+    private fun nextStepRows(where: String, args: Array<String>, limit: Int): List<Map<String, Any?>> =
+        readableDatabase.rawQuery("""SELECT images.id, images.kind, images.confidence, images.tags,
+            images.category, images.decision, images.collection, substr(details.ocr_text, 1, 1800),
+            f.state, f.due, $followUpKind, images.analyzed
+            FROM images LEFT JOIN memory_details details ON details.image_id = images.id
+            LEFT JOIN photo_followups f ON f.image_id = images.id
+            WHERE images.status = 'complete' AND images.decision != 'dismissed' AND $visible
+              AND ($followUpKind) IS NOT NULL AND (f.state IS NULL OR f.state IN ('scheduled', 'delivered'))
+              AND ($where) ORDER BY images.analyzed DESC, images.id DESC LIMIT $limit""", args).use { row ->
+            buildList {
+                while (row.moveToNext()) {
+                    val id = row.getLong(0)
+                    val (source, captured) = memorySource(id) ?: continue
+                    val photo = entry(id, row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) },
+                        row.getString(3), row.getString(4), row.getString(5), row.getString(6), source) +
+                        ("sourceKey" to source.first.toString())
+                    add(mapOf("photo" to photo, "captured" to captured, "text" to row.getString(7).orEmpty(),
+                        "state" to row.getString(8), "due" to row.getLong(9), "kind" to row.getString(10),
+                        "analyzed" to row.getLong(11)))
+                }
+            }
+        }
+
+    fun nextSteps(): List<Map<String, Any?>> = listOf("shopping", "receipt").flatMap { kind ->
+        nextStepRows("($followUpKind) = ?", arrayOf(kind), 48)
+    }
+
+    fun nextStep(id: String): Map<String, Any?>? = nextStepRows("images.id = ?", arrayOf(id), 1).firstOrNull()
+
+    fun shoppingOcrTarget(id: Long): PendingOcr? = readableDatabase.rawQuery(
+        """SELECT images.fingerprint FROM images WHERE images.id = ? AND images.status = 'complete'
+            AND images.decision != 'dismissed' AND ($followUpKind) = 'shopping' AND $visible""",
+        arrayOf(id.toString()),
+    ).use { row -> if (row.moveToFirst()) PendingOcr(id, row.getString(0)) else null }
+
+    fun recentShopping(after: Long): String? = nextStepRows(
+        "($followUpKind) = 'shopping' AND images.analyzed > ? AND f.state IS NULL AND trim(details.ocr_text) != ''",
+        arrayOf(after.toString()), 12,
+    ).firstNotNullOfOrNull { candidate ->
+        val text = candidate["text"] as String
+        if (!SHOPPING_EVIDENCE.containsMatchIn(text)) null
+        else (candidate["photo"] as Map<*, *>)["id"] as? String
+    }
+
+    fun writeFollowUp(id: String, state: String, due: Long = 0L) {
+        writableDatabase.insertWithOnConflict("photo_followups", null, ContentValues().apply {
+            put("image_id", id.toLong())
+            put("state", state)
+            put("due", due)
+        }, SQLiteDatabase.CONFLICT_REPLACE).also { check(it != -1L) { "Could not save the follow-up." } }
+    }
+
+    fun cancelFollowUp(id: String) {
+        writableDatabase.delete("photo_followups", "image_id = ? AND state IN ('scheduled', 'delivered')", arrayOf(id))
+    }
+
+    fun fileReceipt(id: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            check(nextStep(id)?.get("kind") == "receipt") { "This receipt is no longer available." }
+            decide(id.toLong(), "kept", "Reimbursements")
+            writeFollowUp(id, "done")
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    fun scheduledFollowUps(): List<Pair<String, Long>> = readableDatabase.rawQuery(
+        "SELECT image_id, due FROM photo_followups WHERE state = 'scheduled'", null,
+    ).use { row -> buildList { while (row.moveToNext()) add(row.getString(0) to row.getLong(1)) } }
+
+    fun markFollowUpDelivered(id: String, due: Long) {
+        writableDatabase.execSQL("UPDATE photo_followups SET state = 'delivered' WHERE image_id = ? AND due = ? AND state = 'scheduled'",
+            arrayOf(id, due.toString()))
+    }
+
     private val pendingOcr = """FROM images LEFT JOIN memory_details details ON details.image_id = images.id
         WHERE images.status = 'complete' AND images.decision != 'dismissed' AND $OCR_ELIGIBLE
         AND details.ocr_text IS NULL AND $visible""".trimIndent()
@@ -813,7 +903,8 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             db.execSQL("""INSERT OR IGNORE INTO memory_details(image_id)
                 SELECT id FROM images WHERE id = ? AND fingerprint = ? AND status = 'complete'""", args)
             db.update("memory_details", ContentValues().apply { put("ocr_text", text.trim().take(12_000)) },
-                """image_id = ? AND EXISTS (SELECT 1 FROM images WHERE id = memory_details.image_id
+                """image_id = ? AND (ocr_text IS NULL OR ocr_text = '')
+                    AND EXISTS (SELECT 1 FROM images WHERE id = memory_details.image_id
                     AND fingerprint = ? AND status = 'complete')""", args)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }

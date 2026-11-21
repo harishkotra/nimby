@@ -2,6 +2,7 @@
   "expo": {
     "name": "Nimby",
     "slug": "nimby",
+    "scheme": "nimby",
     "version": "0.2.0",
     "platforms": ["android"],
     "orientation": "portrait",

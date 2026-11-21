@@ -6,7 +6,8 @@
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "product-search": "node --env-file-if-exists=.env server/product-search.mjs"
   },
   "dependencies": {
     "expo": "58.0.26",
