@@ -25,7 +25,7 @@ internal fun lowQuality(tags: JSONObject?): Boolean =
 internal data class ArchivedPhoto(val uri: String, val name: String, val album: String,
     val bytes: Long, val version: String, val archived: Long, val eligible: Long)
 internal class GalleryMemory(context: Context, private val gallery: GallerySource) :
-    SQLiteOpenHelper(context, "nimby-gallery.db", null, 5) {
+    SQLiteOpenHelper(context, "nimby-gallery.db", null, 6) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -56,6 +56,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         createArchiveTables(db)
         addInsightColumns(db)
         addScanScope(db)
+        createScanResults(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -83,6 +84,15 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             }
         }
         if (oldVersion < 5) addScanScope(db)
+        if (oldVersion < 6) createScanResults(db)
+    }
+
+    private fun createScanResults(db: SQLiteDatabase) {
+        db.execSQL("""CREATE TABLE scan_results (
+            scan_id INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+            uri TEXT NOT NULL, image_id INTEGER NOT NULL,
+            PRIMARY KEY(scan_id, uri)
+        )""")
     }
 
     private fun addScanScope(db: SQLiteDatabase) {
@@ -451,8 +461,20 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         }, "id = ?", arrayOf(id.toString()))
     }
 
+    fun recordScanResults(scanId: Long, uris: Collection<String>) {
+        if (uris.isEmpty()) return
+        val slots = uris.joinToString(",") { "?" }
+        writableDatabase.execSQL(
+            """INSERT OR REPLACE INTO scan_results(scan_id, uri, image_id)
+                SELECT ?, uri, image_id FROM sources WHERE uri IN ($slots) AND image_id IS NOT NULL""",
+            arrayOf(scanId.toString(), *uris.toTypedArray())
+        )
+    }
+
     fun scanHistory(currentId: Long?): List<Map<String, Any?>> = readableDatabase.rawQuery(
-        "SELECT id, started, finished, phase, total, analyzed, cached, failed, scope IS NOT NULL FROM scans ORDER BY id DESC LIMIT 20", null
+        """SELECT id, started, finished, phase, total, analyzed, cached, failed, scope IS NOT NULL,
+            EXISTS (SELECT 1 FROM scan_results WHERE scan_id = scans.id)
+            FROM scans ORDER BY id DESC LIMIT 20""", null
     ).use { row ->
         buildList {
             while (row.moveToNext()) {
@@ -462,7 +484,8 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                     "finished" to row.getLong(2).takeUnless { row.isNull(2) },
                     "phase" to (if (phase == "running" && id != currentId) "interrupted" else phase),
                     "total" to row.getInt(4), "analyzed" to row.getInt(5), "cached" to row.getInt(6), "failed" to row.getInt(7),
-                    "resumable" to (id != currentId && phase in setOf("running", "interrupted") && row.getInt(8) == 1)))
+                    "resumable" to (id != currentId && phase in setOf("running", "interrupted") && row.getInt(8) == 1),
+                    "hasResults" to (row.getInt(9) == 1)))
             }
         }
     }
@@ -604,13 +627,14 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         }, "id = ?", arrayOf(id.toString()))
     }
 
-    fun available(id: Long): Uri? = primarySource(id)?.first
+    fun available(id: Long, source: String? = null): Uri? = primarySource(id, source)?.first
 
-    private fun primarySource(id: Long): Triple<Uri, String, String>? = readableDatabase.rawQuery(
+    private fun primarySource(id: Long, source: String? = null): Triple<Uri, String, String>? = readableDatabase.rawQuery(
         """SELECT uri, name, album FROM sources WHERE image_id = ?
+            AND (${if (source == null) "1 = 1" else "uri = ?"})
             AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = sources.uri)
             ORDER BY source, captured DESC""",
-        arrayOf(id.toString())
+        listOfNotNull(id.toString(), source).toTypedArray()
     ).use { row ->
         while (row.moveToNext()) {
             val uri = Uri.parse(row.getString(0))
@@ -620,8 +644,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
     }
 
     private fun entry(id: Long, kind: String?, confidence: Double?, tags: String, category: String?,
-                      decision: String, collection: String?): Map<String, Any?> {
-        val photo = primarySource(id)
+                      decision: String, collection: String?, photo: Triple<Uri, String, String>? = primarySource(id)): Map<String, Any?> {
         val labels = JSONArray(tags)
         return mapOf(
             "id" to id.toString(), "uri" to photo?.first?.toString(), "name" to (photo?.second ?: "Unavailable photo"),
@@ -632,6 +655,51 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                 mapOf("label" to label.getString("label"), "confidence" to label.getDouble("confidence"))
             }
         )
+    }
+
+    private val reviewCategory = """COALESCE(images.category, CASE images.kind
+        WHEN 'screenshot' THEN 'Screenshots' WHEN 'photo' THEN 'Photos'
+        WHEN 'selfie' THEN 'Selfies' WHEN 'document' THEN 'Documents' WHEN 'receipt' THEN 'Receipts'
+        ELSE images.kind END, 'Other')""".trimIndent()
+    private val scanReviewRows = """FROM scan_results r JOIN sources s ON s.uri = r.uri AND s.image_id = r.image_id
+        JOIN images ON images.id = r.image_id
+        WHERE r.scan_id = ? AND images.status = 'complete'
+        AND NOT EXISTS (SELECT 1 FROM archive a WHERE a.uri = r.uri)""".trimIndent()
+
+    fun reviewCategories(scanId: Long?): List<Map<String, Any?>> {
+        val db = readableDatabase
+        val scan = scanId != null
+        val category = if (scan) reviewCategory else "category"
+        val rows = if (scan) scanReviewRows else
+            "FROM images WHERE status = 'complete' AND decision = 'new' AND category IS NOT NULL AND $visible"
+        val args = scanId?.let { arrayOf(it.toString()) } ?: emptyArray()
+        val groups = db.rawQuery(
+            "SELECT $category, COUNT(*) $rows GROUP BY $category ORDER BY COUNT(*) DESC, $category",
+            args
+        ).use { row -> buildList { while (row.moveToNext()) add(row.getString(0) to row.getInt(1)) } }
+        return groups.map { (name, count) ->
+            val results = if (scanId != null) scanFeed(scanId, name, 0, 3) else feed("suggestions", name, 0, 3)
+            mapOf("name" to name, "count" to count, "previews" to results.mapNotNull { it["uri"] })
+        }
+    }
+
+    fun scanFeed(scanId: Long, category: String?, offset: Int, limit: Int): List<Map<String, Any?>> {
+        val filter = if (category == null) "" else " AND $reviewCategory = ?"
+        val args = listOfNotNull(scanId.toString(), category).toTypedArray()
+        return readableDatabase.rawQuery(
+            """SELECT images.id, images.kind, images.confidence, images.tags, $reviewCategory,
+                images.decision, images.collection, s.uri, s.name, s.album
+                $scanReviewRows$filter ORDER BY s.captured DESC, s.uri LIMIT $limit OFFSET $offset""",
+            args
+        ).use { row -> buildList {
+            while (row.moveToNext()) {
+                val uri = Uri.parse(row.getString(7))
+                val photo = if (gallery.readable(uri)) Triple(uri, row.getString(8), row.getString(9)) else null
+                add(entry(row.getLong(0), row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) },
+                    row.getString(3), row.getString(4), row.getString(5), row.getString(6), photo) +
+                    ("sourceKey" to row.getString(7)))
+            }
+        } }
     }
 
     fun feed(mode: String, category: String?, offset: Int, limit: Int): List<Map<String, Any?>> {

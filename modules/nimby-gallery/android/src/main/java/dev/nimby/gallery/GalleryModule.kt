@@ -181,6 +181,14 @@ class GalleryModule : Module() {
             withContext(Dispatchers.IO) { memory.feed(mode, group, offset.coerceAtLeast(0), limit.coerceIn(1, 48)) }
         }
 
+        AsyncFunction("reviewCategories") Coroutine { scanId: String? ->
+            withContext(Dispatchers.IO) { memory.reviewCategories(scanId?.toLong()) }
+        }
+
+        AsyncFunction("scanFeed") Coroutine { scanId: String, category: String?, offset: Int, limit: Int ->
+            withContext(Dispatchers.IO) { memory.scanFeed(scanId.toLong(), category, offset.coerceAtLeast(0), limit.coerceIn(1, 48)) }
+        }
+
         AsyncFunction("groups") Coroutine { kept: Boolean ->
             withContext(Dispatchers.IO) { memory.groups(kept) }
         }
@@ -193,8 +201,8 @@ class GalleryModule : Module() {
             withContext(Dispatchers.IO) { memory.similar(id.toLong()) }
         }
 
-        AsyncFunction("openOriginal") Coroutine { id: String ->
-            val uri = withContext(Dispatchers.IO) { memory.available(id.toLong()) }
+        AsyncFunction("openOriginal") Coroutine { id: String, source: String? ->
+            val uri = withContext(Dispatchers.IO) { memory.available(id.toLong(), source) }
                 ?: throw IllegalStateException("This photo has been deleted or access has changed.")
             withContext(Dispatchers.Main) {
                 val activity = requireNotNull(appContext.currentActivity)

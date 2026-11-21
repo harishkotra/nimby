@@ -25,11 +25,12 @@ import java.util.zip.ZipFile
 
 internal data class ScanProgress(
     val runId: Int = 0, val phase: String = "idle", val total: Int = 0, val processed: Int = 0, val analyzed: Int = 0,
-    val cached: Int = 0, val failed: Int = 0, val errors: List<String> = emptyList(), val problem: String? = null
+    val cached: Int = 0, val failed: Int = 0, val errors: List<String> = emptyList(), val problem: String? = null,
+    val resultId: String? = null
 ) {
     fun bridge() = mapOf(
         "runId" to runId, "phase" to phase, "total" to total, "processed" to processed, "analyzed" to analyzed,
-        "cached" to cached, "failed" to failed, "errors" to errors, "problem" to problem
+        "cached" to cached, "failed" to failed, "errors" to errors, "problem" to problem, "resultId" to resultId
     )
 }
 
@@ -184,6 +185,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
         try {
             historyId = memory.beginScan(buckets, uris)
             currentScanId = historyId
+            progress.update { it.copy(resultId = historyId.toString()) }
             val scopes = if (buckets.isEmpty()) listOf(emptyList()) else buckets.chunked(100)
             val excluded = if (buckets.isEmpty() && uris.isEmpty()) memory.excludedAlbums().mapNotNull { it["id"] }.toSet() else emptySet()
             val count = when {
@@ -218,6 +220,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                     if (memory.isCached(id)) {
                         if (!gallery.readable(uri)) throw IOException("Photo access has changed.")
                         memory.clearSourceError(uri)
+                        memory.recordScanResults(historyId, listOf(uri.toString()))
                         progress.update { it.copy(processed = it.processed + 1, cached = it.cached + 1) }
                         return
                     }
@@ -240,6 +243,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                         bitmap.recycle()
                     }
                     memory.clearSourceError(uri)
+                    memory.recordScanResults(historyId, listOf(uri.toString()))
                     progress.update { it.copy(processed = it.processed + 1, analyzed = it.analyzed + 1) }
                 } catch (error: CancellationException) {
                     throw error
@@ -285,13 +289,19 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                     if (page.isEmpty()) break
                     val included = page.filter { it.bucket !in excluded }
                     val cached = memory.cachedPhotos(included)
-                    included.forEach { photo ->
-                        if (photo.uri.toString() in cached) {
-                            paused.first { !it }
-                            currentCoroutineContext().ensureActive()
-                            progress.update { it.copy(processed = it.processed + 1, cached = it.cached + 1) }
-                            if (progress.value.processed % 12 == 0) memory.saveScan(historyId, progress.value, false)
-                        } else process(photo.uri, photo)
+                    val reused = mutableListOf<String>()
+                    try {
+                        included.forEach { photo ->
+                            if (photo.uri.toString() in cached) {
+                                paused.first { !it }
+                                currentCoroutineContext().ensureActive()
+                                reused.add(photo.uri.toString())
+                                progress.update { it.copy(processed = it.processed + 1, cached = it.cached + 1) }
+                                if (progress.value.processed % 12 == 0) memory.saveScan(historyId, progress.value, false)
+                            } else process(photo.uri, photo)
+                        }
+                    } finally {
+                        memory.recordScanResults(historyId, reused)
                     }
                     before = page.last().id
                 }

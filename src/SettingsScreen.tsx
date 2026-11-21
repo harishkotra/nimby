@@ -28,9 +28,9 @@ function SettingsAction({ name, icon, run, disabled, danger, expanded }: {
   </Pressable>;
 }
 
-export function SettingsScreen({ access, scan, openPermissionSettings, revision, changed, openArchive, onResume }: {
+export function SettingsScreen({ access, scan, openPermissionSettings, revision, changed, openArchive, onResume, openScan }: {
   access: Access; scan: Scan; openPermissionSettings: () => void; revision: number; changed: () => void;
-  openArchive: () => void; onResume: () => void;
+  openArchive: () => void; onResume: () => void; openScan: (id: string) => void;
 }) {
   const [status, setStatus] = useState<EyeStatus | null>(null);
   const [statusError, setStatusError] = useState(false);
@@ -196,6 +196,7 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
         {processing?.history.length ? processing.history.map((record) =>
           <View key={record.id} style={layout.historyItem}><View style={layout.historyDot} /><View style={layout.modelText}>
             <Body>{scanLine(record)}</Body>
+            {record.hasResults && record.finished != null && <Button label="View results" subtle run={() => openScan(record.id)} />}
           </View></View>) : <Body>New scans will appear here.</Body>}
       </View>}
     </View>

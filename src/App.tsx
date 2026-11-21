@@ -41,8 +41,10 @@ function Nimby() {
   const [recent, setRecent] = useState<Result[]>([]);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewError, setOverviewError] = useState(false);
-  const [feed, setFeed] = useState<Feed>('suggestions');
+  const [feed, setFeed] = useState<Feed | 'scan'>('suggestions');
   const [feedCategory, setFeedCategory] = useState<string | null>(null);
+  const [reviewScan, setReviewScan] = useState<string | null>(null);
+  const reviewBack = useRef<Screen>('Home');
   const backTo = useRef<Screen>('Home');
   const [recentError, setRecentError] = useState(false);
   const [detail, setDetail] = useState<Result | null>(null);
@@ -110,11 +112,11 @@ function Nimby() {
         return true;
       }
       if (screen === 'Home') return false;
-      setScreen(['Analysis','Settings','Discover','Duplicates'].includes(screen) ? backTo.current : 'Home');
+      goBack();
       return true;
     });
     return () => back.remove();
-  }, [screen, album]);
+  }, [screen, album, feedCategory, feed]);
 
   useEffect(() => {
     if (screen !== 'Home') return;
@@ -218,19 +220,39 @@ function Nimby() {
     setScreen(destination);
   }
 
+  function goBack() {
+    if (screen === 'Discover') {
+      if (feedCategory) setFeedCategory(null);
+      else if (feed === 'kept' || feed === 'dismissed') setFeed('suggestions');
+      else navigate(reviewBack.current);
+    } else if (screen === 'Analysis' || screen === 'Settings' || screen === 'Duplicates') {
+      navigate(backTo.current);
+    } else {
+      navigate('Home');
+    }
+  }
+
+  function openReview(mode: Feed | 'scan', category: string | null = null, scanId: string | null = null) {
+    if (screen !== 'Discover') reviewBack.current = screen;
+    setFeed(mode);
+    setFeedCategory(category);
+    setReviewScan(scanId);
+    navigate('Discover');
+  }
+
+  function changed() {
+    setRevision((value) => value + 1);
+  }
+
   const links = {
     gallery: () => void galleryAction('browse'),
     duplicates: () => navigate('Duplicates'),
     archive: () => navigate('Archive'),
-    discover: (mode: Feed, category: string | null = null) => {
-      setFeed(mode);
-      setFeedCategory(category);
-      navigate('Discover');
-    },
+    discover: openReview,
   };
 
   const primary = tabs.some((tab) => tab.name === screen);
-  const selectedTab = screen === 'Discover' ? 'Gallery' : screen === 'Duplicates' ? 'Insights' : primary ? screen : backTo.current;
+  const selectedTab = screen === 'Duplicates' ? 'Insights' : primary ? screen : backTo.current;
 
   return <>
     <View style={layout.top}>
@@ -238,7 +260,7 @@ function Nimby() {
         ? <Pressable accessibilityRole="button" accessibilityLabel="Nimby Home" onPress={() => navigate('Home')} style={layout.brand}>
             <Text style={layout.wordmark}>nimby<Text style={layout.wordmarkDot}>.</Text></Text>
           </Pressable>
-        : <IconButton icon="back" label="Go back" run={() => navigate(backTo.current)} style={layout.headerButton} />}
+        : <IconButton icon="back" label="Go back" run={goBack} style={layout.headerButton} />}
       <View style={layout.headerActions}>
         {scan.phase !== 'idle' && screen !== 'Analysis' && <Pressable accessibilityRole="button"
           accessibilityLabel={scanActive(scan) ? 'View active scan' : 'View latest scan'} onPress={() => navigate('Analysis')}
@@ -246,22 +268,26 @@ function Nimby() {
           {scanActive(scan) && <View style={layout.liveDot} />}
           <Icon name={scanActive(scan) ? 'scan' : 'clock'} size={20} tint={scanActive(scan) ? color.blue : color.muted} />
         </Pressable>}
-        {screen !== 'Settings' && <IconButton icon="settings" label="Settings" run={() => navigate('Settings')} style={layout.headerButton} />}
+        {screen === 'Home' && <IconButton icon="settings" label="Settings" run={() => navigate('Settings')} style={layout.headerButton} />}
       </View>
     </View>
     <View style={layout.main}>
       {screen === 'Home' && <HomeDashboard {...links} data={overview} error={overviewError} busy={busy}
-        scan={() => void galleryAction('scan')} pick={() => void pick()} previews={recent} recentError={recentError} openPhoto={setDetail} />}
+        scan={() => void galleryAction('scan')} pick={() => void pick()} previews={recent} recentError={recentError}
+        openPhoto={setDetail} openScan={(id) => openReview('scan', null, id)} />}
       {screen === 'Gallery' && <GalleryScreen access={access} albums={albums} loading={loadingAlbums} error={galleryError}
         album={album} open={setAlbum} manage={() => void galleryAction('manage')} settings={showSettings}
         pick={() => void pick()} scan={start} revision={galleryRevision} revisit={() => links.discover('suggestions')} />}
-      {screen === 'Discover' && <Discover key={JSON.stringify([feed, feedCategory])} initialMode={feed}
-        initialCategory={feedCategory} revision={revision} open={setDetail} />}
+      {screen === 'Discover' && <Discover key={JSON.stringify([feed, reviewScan])} mode={feed}
+        category={feedCategory} scanId={reviewScan} revision={revision} open={setDetail} changed={changed}
+        openCategory={setFeedCategory} openMode={openReview} />}
       {screen === 'Insights' && <InsightsScreen {...links} data={overview} error={overviewError} />}
       {screen === 'Duplicates' && <DuplicatesScreen revision={revision} changed={() => setRevision((value) => value + 1)} />}
-      {screen === 'Analysis' && <AnalysisScreen scan={scan} access={access} control={control} discover={() => links.discover('suggestions')} />}
+      {screen === 'Analysis' && <AnalysisScreen scan={scan} access={access} control={control}
+        results={(id) => openReview('scan', null, id)} done={goBack} />}
       {screen === 'Settings' && <SettingsScreen access={access} scan={scan} revision={revision}
-        changed={() => setRevision((value) => value + 1)} openPermissionSettings={showSettings} openArchive={() => navigate('Archive')}
+        changed={changed} openPermissionSettings={showSettings} openArchive={() => navigate('Archive')}
+        openScan={(id) => openReview('scan', null, id)}
         onResume={() => { setScan(native!.scanStatus()); navigate('Analysis'); }} />}
       {screen === 'Archive' && <ArchiveScreen revision={revision} scanning={scanActive(scan)} changed={() => setRevision((value) => value + 1)} />}
     </View>
@@ -283,8 +309,9 @@ function Nimby() {
   </>;
 }
 
-function AnalysisScreen({ scan, access, control, discover }: {
-  scan: Scan; access: Access; control: (action: 'pause' | 'resume' | 'cancel') => void; discover: () => void;
+function AnalysisScreen({ scan, access, control, results, done }: {
+  scan: Scan; access: Access; control: (action: 'pause' | 'resume' | 'cancel') => void;
+  results: (id: string) => void; done: () => void;
 }) {
   const title = {
     idle: 'Ready to scan', preparing: 'Preparing Eye', running: 'Analyzing photos', paused: 'Scan paused', matching: 'Checking for duplicates',
@@ -308,17 +335,19 @@ function AnalysisScreen({ scan, access, control, discover }: {
         style={layout.track}><View style={[layout.progress, { width: `${progress}%` }]} /></View>
       <Body>{scan.analyzed} newly analyzed · {scan.cached} cached · {scan.failed} failed</Body>
     </View>
+    <View style={styles.row}>
+      {scanActive(scan) ? <>
+        {scan.phase !== 'matching' && <Button label={scan.phase === 'paused' ? 'Resume' : 'Pause'} run={() => control(scan.phase === 'paused' ? 'resume' : 'pause')} />}
+        <Button label="Cancel scan" subtle run={() => control('cancel')} />
+      </> : scan.resultId && scan.analyzed + scan.cached > 0
+        ? <Button label="Review scan results" icon="gallery" run={() => results(scan.resultId!)} />
+        : <Button label="Done" run={done} />}
+    </View>
     {!!scan.problem && <ErrorText>{scan.problem}</ErrorText>}
     {scan.errors.length > 0 && <View style={styles.column}>
       <Heading>Recent errors</Heading>
       {scan.errors.map((error, index) => <ErrorText key={`${index}-${error}`}>{error}</ErrorText>)}
     </View>}
-    <View style={styles.row}>
-      {scanActive(scan) ? <>
-        {scan.phase !== 'matching' && <Button label={scan.phase === 'paused' ? 'Resume' : 'Pause'} run={() => control(scan.phase === 'paused' ? 'resume' : 'pause')} />}
-        <Button label="Cancel scan" subtle run={() => control('cancel')} />
-      </> : <Button label="Open Worth Revisiting" run={discover} />}
-    </View>
   </ScrollView>;
 }
 

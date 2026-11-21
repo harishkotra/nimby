@@ -7,7 +7,8 @@ Nimby is an Android photo review app that helps you rediscover useful things you
 ## What it does
 
 - Scan the accessible gallery, individual albums, or photos chosen through Android’s system picker.
-- Revisit references by the categories recognized from Eye’s photo classification. Keep, dismiss, or organize a photo into a collection.
+- Open the results from a specific scan, including photos whose analysis was reused. Results are grouped by recognized reference category or image type, with real thumbnail previews.
+- Open Worth revisiting to browse reference categories and select photos in batches. Keep, dismiss, or organize a photo into a collection.
 - Review exact file copies and visually similar photos, with a suggested keeper for each duplicate group.
 - See scan history, gallery coverage, and estimated storage impact.
 - Check the Eye runtime in Settings with a bundled self-test, measured inference time, and diagnostics.
@@ -121,3 +122,5 @@ java -jar /tmp/nimby-duplicates.jar
 ```
 
 On a device, run the Eye self-test, scan an album twice to verify cache reuse, and exercise permission changes from Android settings. Archive and restore a photo, then check that the original remains in the system gallery. Use expendable test files for deletion checks.
+
+For scan review, scan two albums separately and open each result from Settings → Scan history. Check that each shows its own categories and photos, including cached results on a repeat scan. Scan records created before the results feature retain their counts and dates. Their per-photo membership becomes available when you run a new scan.

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type DimensionValue } from 'react-native';
 import type { Feed, Overview, Result } from './gallery';
 import { PhotoTile } from './PhotoGrid';
-import { Body, Button, color, EmptyState, ErrorText, formatBytes, Heading, Icon, type IconName, percent, SectionTitle, styles } from './ui';
+import { Body, Button, color, ErrorText, formatBytes, Heading, Icon, type IconName, percent, SectionTitle, styles } from './ui';
 
 const count = (n: number | null | undefined) => n == null ? '—' : n.toLocaleString();
 const measure = (n: number | null | undefined) => n == null ? '—' : formatBytes(n);
@@ -10,16 +10,6 @@ const chartPalette = ['#A4E3C3', '#8AC3CE', '#C4B4DD', '#E2C291', '#8BA699', '#5
 const ratio = (a: number | null | undefined, b: number | null | undefined) => b ? Math.min(1, Math.max(0, (a ?? 0) / b)) : 0;
 const widthPercent = (value: number) => `${value * 100}%` as DimensionValue;
 type Links = { gallery: () => void; duplicates: () => void; archive: () => void; discover: (mode: Feed, category?: string) => void };
-
-function Metric({ label, value, icon, run }: { label: string; value: string; icon: IconName; run?: () => void }) {
-  const content = <>
-    <Icon name={icon} size={17} tint={color.blue} />
-    <Text style={layout.metricValue}>{value}</Text>
-    <Text style={layout.caption}>{label}</Text>
-  </>;
-  return run ? <Pressable accessibilityRole="button" accessibilityLabel={`${value}, ${label}`} onPress={run}
-    style={({ pressed }) => [layout.metric, pressed && styles.faded]}>{content}</Pressable> : <View style={layout.metric}>{content}</View>;
-}
 
 function Action({ label, value, icon, run }: { label: string; value?: string; icon: IconName; run: () => void }) {
   return <Pressable accessibilityRole="button" onPress={run}
@@ -57,55 +47,50 @@ export function CoverageRing({ value, size }: { value: number | null; size: numb
   </View>;
 }
 
-export function HomeDashboard({ data, error, scan, pick, busy, previews, recentError, openPhoto, ...links }: Links & {
+export function HomeDashboard({ data, error, scan, pick, busy, previews, recentError, openPhoto, openScan, ...links }: Links & {
   data: Overview | null; error: boolean; scan: () => void; pick: () => void; busy: boolean;
-  previews: Result[]; recentError: boolean; openPhoto: (item: Result) => void;
+  previews: Result[]; recentError: boolean; openPhoto: (item: Result) => void; openScan: (id: string) => void;
 }) {
-  const date = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  const activity = data?.history[0];
+  const activity = data?.history.find((record) => record.finished != null);
   const photos = previews.filter((item) => item.uri).slice(0, 3);
+  const reviewed = activity ? activity.analyzed + activity.cached : 0;
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={layout.intro}>
-      <Text style={layout.date}>{date}</Text>
       <Heading large>Your gallery</Heading>
-      <Body>{data ? data.worth ? `${count(data.worth)} worth revisiting` : 'A quieter way to sort through your photos.'
-        : 'See what’s worth another look.'}</Body>
-    </View>
-    <View style={layout.overview}>
-      <Metric label="Analyzed" value={count(data?.localAnalyzed)} icon="scan" run={() => links.discover('recent')} />
-      <Metric label="Revisit" value={count(data?.worth)} icon="bookmark" run={() => links.discover('suggestions')} />
-      <Metric label="Archived" value={count(data?.archived)} icon="archive" run={links.archive} />
+      <Body>{data?.localAnalyzed
+        ? `${data.localAnalyzed.toLocaleString()} photos analyzed on this device`
+        : 'Scan your photos to find receipts, screenshots, and other saved references.'}</Body>
     </View>
     <View style={layout.scanGroup}>
-      <Button label="Scan Gallery" icon="scan" run={scan} disabled={busy} />
+      <Button label="Scan gallery" icon="scan" run={scan} disabled={busy} />
       <View style={layout.halves}>
-        <Button label="Browse Albums" subtle disabled={busy} run={links.gallery} style={layout.flex} />
-        <Button label="Select Photos" subtle disabled={busy} run={pick} style={layout.flex} />
+        <Button label="Browse albums" subtle disabled={busy} run={links.gallery} style={layout.flex} />
+        <Button label="Pick photos" subtle disabled={busy} run={pick} style={layout.flex} />
       </View>
     </View>
     {!!error && <ErrorText>Gallery totals are temporarily unavailable.</ErrorText>}
+    {activity && <View style={layout.section}>
+      <Heading>Last scan</Heading>
+      <Body>{new Date(activity.started).toLocaleDateString()} · {count(reviewed)} with results
+        {activity.failed ? ` · ${count(activity.failed)} failed` : ''}</Body>
+      {activity.hasResults && <Button label="Review scan results" icon="gallery" subtle run={() => openScan(activity.id)} />}
+    </View>}
     <View style={layout.section}>
-      <SectionTitle title="Recently analyzed" action={photos.length ? 'Browse' : undefined} run={() => links.discover('recent')} />
-      {photos.length ? <View style={layout.preview}>
+      <SectionTitle title="Recently analyzed" action={photos.length ? 'See all' : undefined} run={() => links.discover('recent')} />
+      {!!photos.length && <View style={layout.preview}>
         {photos.map((photo) => <View key={photo.id} style={layout.previewTile}>
           <PhotoTile uri={photo.uri} label={photo.name} press={() => openPhoto(photo)} />
         </View>)}
-      </View> : <EmptyState icon="gallery" title="Your first scan starts here" text="Scanned photos will appear here for a second look." />}
+      </View>}
+      {!photos.length && <Body>Analyzed photos will appear here.</Body>}
       {recentError && <ErrorText>Recent photos could not be loaded.</ErrorText>}
     </View>
     <View style={layout.section}>
-      <Heading>Make a little room</Heading>
-      <Action icon="layers" label="Review duplicates" value={data?.potentialBytes != null ?
-        `${formatBytes(data.potentialBytes)} in potential savings` : undefined} run={links.duplicates} />
-      <Action icon="bookmark" label="Worth Revisiting" run={() => links.discover('suggestions')} />
-      <Action icon="archive" label="Open Archive" run={links.archive} />
+      <Heading>Review photos</Heading>
+      <Action icon="bookmark" label="Worth revisiting" value={data ? `${count(data.worth)} suggestions by category` : undefined}
+        run={() => links.discover('suggestions')} />
+      <Action icon="layers" label="Duplicates" value={data ? `${count(data.duplicateGroups)} groups to review` : undefined} run={links.duplicates} />
     </View>
-    {!!activity && <View style={layout.activity}>
-      <Icon name="clock" tint={color.muted} />
-      <View style={layout.flex}><Text style={layout.actionName}>Latest scan</Text>
-        <Body>{count(activity.analyzed)} analyzed · {count(activity.cached)} reused{activity.failed ? ` · ${activity.failed} failed` : ''}
-          {'\n'}{new Date(activity.started).toLocaleDateString()}</Body></View>
-    </View>}
   </ScrollView>;
 }
 
@@ -190,10 +175,6 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
 
 const layout = StyleSheet.create({
   intro: { gap: 5 },
-  date: { color: color.blue, fontSize: 13, fontWeight: '700' },
-  overview: { flexDirection: 'row', gap: 6, backgroundColor: color.white, borderRadius: 22, padding: 10 },
-  metric: { flex: 1, minWidth: 0, paddingHorizontal: 6, paddingVertical: 6, gap: 5 },
-  metricValue: { color: color.ink, fontSize: 24, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: -0.9 },
   caption: { color: color.muted, fontSize: 13, fontWeight: '500' },
   scanGroup: { gap: 8 },
   halves: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
@@ -205,7 +186,6 @@ const layout = StyleSheet.create({
   actionIcon: { width: 39, height: 39, borderRadius: 13, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
   actionText: { flex: 1, gap: 2 },
   actionName: { color: color.ink, fontWeight: '600', fontSize: 15, flexShrink: 1 },
-  activity: { flexDirection: 'row', gap: 11, alignItems: 'flex-start', paddingTop: 10 },
   coverage: { alignItems: 'center', justifyContent: 'center', paddingVertical: 18, gap: 7 },
   ring: { overflow: 'hidden', backgroundColor: color.tint, marginBottom: 10 },
   ringCenter: { position: 'absolute', backgroundColor: color.paper, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, gap: 0 },

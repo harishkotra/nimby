@@ -11,6 +11,7 @@ export type Feed = 'recent' | 'suggestions' | 'kept' | 'dismissed' | 'quality' |
 
 export type Result = {
   id: string;
+  sourceKey?: string;
   uri: string | null;
   name: string;
   album: string | null;
@@ -34,7 +35,10 @@ export type Scan = {
   failed: number;
   errors: string[];
   problem: string | null;
+  resultId: string | null;
 };
+
+export type ReviewCategory = { name: string; count: number; previews: string[] };
 
 export type EyeStatus = {
   sdkVersion: string;
@@ -53,7 +57,7 @@ export type EyeStatus = {
 };
 
 export type ScanRecord = { id: string; started: number; finished: number | null; phase: string;
-  total: number; analyzed: number; cached: number; failed: number; resumable: boolean };
+  total: number; analyzed: number; cached: number; failed: number; resumable: boolean; hasResults: boolean };
 export type Processing = { indexed: number; cacheBytes: number; lastScan: number | null;
   history: ScanRecord[]; excluded: { id: string; name: string }[] };
 export type ArchivedPhoto = { id: string; uri: string | null; name: string; album: string; bytes: number;
@@ -93,10 +97,12 @@ type GalleryModule = {
   duplicatePage(offset: number): Promise<DuplicateGroup[]>;
   markReviewed(uris: string[]): Promise<void>;
   feed(mode: Feed, group: string | null, offset: number, limit: number): Promise<Result[]>;
+  reviewCategories(scanId: string | null): Promise<ReviewCategory[]>;
+  scanFeed(scanId: string, category: string | null, offset: number, limit: number): Promise<Result[]>;
   groups(kept: boolean): Promise<string[]>;
   decide(id: string, decision: Decision, collection: string | null): Promise<void>;
   similar(id: string): Promise<Result[]>;
-  openOriginal(id: string): Promise<void>;
+  openOriginal(id: string, source: string | null): Promise<void>;
 };
 
 export const native = requireOptionalNativeModule<GalleryModule>('NimbyGallery');

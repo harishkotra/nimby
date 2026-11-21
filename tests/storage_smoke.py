@@ -41,6 +41,7 @@ def migrate(db):
     run(db, body("private fun createArchiveTables", "private val visible"))
     run(db, body("private fun addInsightColumns", "private fun createArchiveTables"))
     run(db, body("private fun addScanScope", "private fun addInsightColumns"))
+    run(db, body("private fun createScanResults", "private fun addScanScope"))
 
 
 def test_storage():
@@ -106,7 +107,43 @@ def test_deletion_wiring():
     assert (NATIVE / "assets/eye/self-test.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_scan_results():
+    db = connect(":memory:")
+    run(db, body("override fun onCreate", "override fun onUpgrade"))
+    migrate(db)
+    db.executemany("INSERT INTO scans(id, started, phase) VALUES(?, 1, 'complete')", [(1,), (2,), (3,)])
+    db.executemany("""INSERT INTO images(id, fingerprint, status, kind, category) VALUES(?, ?, 'complete', ?, ?)""", [
+        (1, "same", "screenshot", "Receipts"),
+        (2, "different", "screenshot", None),
+        (3, "third", "photo", None),
+    ])
+    db.executemany("""INSERT INTO sources(uri,image_id,name,album,bucket,source,media_id,captured,width,height,bytes,modified,version)
+        VALUES (?,?,'Photo','Camera','camera','gallery',0,0,384,384,10,0,'v1')""", [
+        ("content://one", 1), ("content://copy", 1), ("content://two", 2), ("content://three", 3),
+    ])
+    insert = re.search(r'"""(INSERT OR REPLACE INTO scan_results.*?)"""', MEMORY, re.S).group(1)
+    for scan_id, uris in [(2, ["content://one", "content://copy", "content://two"]),
+                          (3, ["content://two", "content://three"])]:
+        db.execute(insert.replace("$slots", ",".join("?" for _ in uris)), (scan_id, *uris))
+    rows = re.search(r'private val scanReviewRows = """(.*?)"""', MEMORY, re.S).group(1)
+    category = re.search(r'private val reviewCategory = """(.*?)"""', MEMORY, re.S).group(1)
+
+    def groups(scan):
+        return dict(db.execute(f"SELECT {category}, COUNT(*) {rows} GROUP BY {category}", (scan,)))
+
+    assert groups(1) == {}
+    assert groups(2) == {"Receipts": 2, "Screenshots": 1}
+    assert groups(3) == {"Screenshots": 1, "Photos": 1}
+    db.execute("UPDATE sources SET image_id = 3 WHERE uri = 'content://one'")
+    db.execute("INSERT INTO archive VALUES('content://copy','Photo','Camera',10,'v1',1,2,0)")
+    assert groups(2) == {"Screenshots": 1}
+    assert db.execute(f"SELECT s.uri {rows} AND {category} = ?", (3, "Photos")).fetchone() == ("content://three",)
+    db.execute("DELETE FROM scans WHERE id = 3")
+    assert scalar(db, "SELECT COUNT(*) FROM scan_results WHERE scan_id=3") == 0
+
+
 if __name__ == "__main__":
     test_storage()
     test_deletion_wiring()
-    print("Migration, archive persistence/restore, cached version SQL, and deletion authorization wiring passed")
+    test_scan_results()
+    print("Migration, scan result scope, archive persistence/restore, cached version SQL, and deletion authorization wiring passed")
