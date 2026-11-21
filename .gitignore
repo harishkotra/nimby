@@ -1,0 +1,16 @@
+node_modules/
+.expo/
+dist/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+**/.gradle/
+**/.kotlin/
+**/.cxx/
+**/build/
+android/local.properties
+*.jks
+*.keystore
+modules/nimby-gallery/android/src/main/assets/eye/eye.tflite
+modules/nimby-gallery/android/src/main/assets/eye/eye_meta.json

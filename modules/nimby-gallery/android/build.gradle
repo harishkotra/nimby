@@ -1,0 +1,17 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'dev.nimby'
+version = '0.2.0'
+
+android {
+  namespace 'dev.nimby.gallery'
+}
+
+dependencies {
+  implementation 'ai.desertant:eye:4.3.0'
+  implementation 'androidx.activity:activity:1.10.1'
+  implementation 'androidx.exifinterface:exifinterface:1.4.1'
+}
