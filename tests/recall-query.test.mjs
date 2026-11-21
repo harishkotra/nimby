@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseRecallQuery, recallDateRange } from '../src/recallQuery.ts';
+import { parseRecallQuery, recallDateRange, visionSceneTerms } from '../src/recallQuery.ts';
 
 const now = new Date(2025, 10, 8, 13);
 
@@ -40,4 +40,21 @@ test('calendar months and weeks cross year boundaries', () => {
   const january = new Date(2025, 0, 1);
   assert.equal(recallDateRange('Last month', january)?.start, new Date(2024, 11, 1).getTime());
   assert.equal(recallDateRange('This week', january)?.start, new Date(2024, 11, 30).getTime());
+});
+
+test('named places are resolved from local labels and compose with dates and scenes', () => {
+  const places = ['Delhi', 'New Delhi', 'Hall (A)'];
+  assert.deepEqual(parseRecallQuery('Show me wedding photos in new delhi from last month', now, places), {
+    terms: 'wedding', place: 'New Delhi', category: null, textOnly: false, date: recallDateRange('Last month', now),
+  });
+  assert.equal(parseRecallQuery('photos at Hall (A)', now, places).place, 'Hall (A)');
+  assert.equal(parseRecallQuery('photos in delhivery', now, places).place, null);
+  assert.equal(parseRecallQuery('photos with a brick wall', now, places).place, null);
+  assert.equal(parseRecallQuery('photos with a beach in the background', now, places).terms, 'beach');
+});
+
+test('Qwen scene suggestions are short, bounded search terms subject to user selection', () => {
+  assert.deepEqual(visionSceneTerms('```json\n{"terms":["Brick wall","Café","https://example.test","party"]}\n```'), ['brick wall']);
+  assert.deepEqual(visionSceneTerms('{"terms":["Wedding", "rustic barn", "wedding"]}'), ['wedding', 'rustic barn']);
+  assert.deepEqual(visionSceneTerms('This looks like a wedding'), []);
 });

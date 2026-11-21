@@ -60,6 +60,15 @@ export async function searchListings(query, key, fetcher = fetch) {
   return matchingListings(query, data.results);
 }
 
+export function parseProductRequest(text) {
+  if (Buffer.byteLength(text) > 1024) return null;
+  try {
+    const body = JSON.parse(text);
+    const query = typeof body?.query === 'string' ? body.query.trim().replace(/\s+/g, ' ') : '';
+    return Object.keys(body ?? {}).length === 1 && query.length >= 3 && query.length <= 120 && /\p{L}/u.test(query) ? query : null;
+  } catch { return null; }
+}
+
 async function readQuery(request) {
   let size = 0;
   const chunks = [];
@@ -68,11 +77,7 @@ async function readQuery(request) {
     if (size > 1024) return null;
     chunks.push(chunk);
   }
-  try {
-    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-    const query = typeof body?.query === 'string' ? body.query.trim().replace(/\s+/g, ' ') : '';
-    return query.length >= 3 && query.length <= 120 && /\p{L}/u.test(query) ? query : null;
-  } catch { return null; }
+  return parseProductRequest(Buffer.concat(chunks).toString('utf8'));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {

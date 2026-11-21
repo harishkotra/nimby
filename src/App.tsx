@@ -376,7 +376,7 @@ function Nimby() {
         pointerEvents={screen === 'Recall' ? 'auto' : 'none'} accessibilityElementsHidden={screen !== 'Recall'}
         importantForAccessibility={screen === 'Recall' ? 'auto' : 'no-hide-descendants'}>
         <RecallScreen revision={revision} open={setDetail} active={screen === 'Recall'} indexed={overview?.localAnalyzed ?? null}
-          scan={() => void galleryAction('scan')} search={searchWithFeedback}
+          scan={() => void galleryAction('scan')} openMap={links.photoMap} search={searchWithFeedback}
           status={native!.memoryStatus} startBackfill={native!.requestMemoryBackfill} />
       </View>}
       {screen === 'Home' && <HomeDashboard {...links} data={overview} error={overviewError} busy={busy}

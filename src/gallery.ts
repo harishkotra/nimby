@@ -83,33 +83,31 @@ export type Overview = {
 export type DuplicatePhoto = { uri: string; imageId: string; name: string; album: string; bytes: number;
   keeper: number | null; aesthetic: number | null };
 export type DuplicateGroup = { id: string; photos: DuplicatePhoto[]; similarity: number | null };
-export type DecisionModelStatus = { supported: boolean; downloaded: boolean; phase: 'idle' | 'downloading' | 'loading' | 'running';
-  bytes: number; issue: string | null; lastInferenceMs: number | null };
 export type ProductVisionStatus = { supported: boolean; installed: boolean; phase: 'idle' | 'downloading' | 'reading';
   received: number; total: number };
 export type FollowUpAction = 'schedule' | 'cancel' | 'done' | 'dismissed' | 'file';
-export type Proposal = 'compare_products' | 'revisit_product' | 'suggest_return_reminder' | 'review_receipt' | 'show_nothing';
 
 type GalleryModule = {
   nextSteps?(photoId: string | null): Promise<NextStepPhoto[]>;
   nextStepNotificationStatus?(): { shopping: boolean; shoppingAvailable: boolean; remindersAvailable: boolean };
   setShoppingNotifications?(enabled: boolean): Promise<void>;
   savePhotoFollowUp?(id: string, action: FollowUpAction, due: number): Promise<void>;
-  functionGemmaStatus?(): DecisionModelStatus;
-  installFunctionGemma?(): Promise<void>;
-  removeFunctionGemma?(): Promise<void>;
   readShoppingText?(id: string): Promise<string | null>;
   productVisionStatus?(): ProductVisionStatus;
   installProductVision?(): Promise<void>;
   cancelProductVisionDownload?(): void;
   removeProductVision?(): Promise<void>;
   identifyProductImage?(id: string): Promise<string>;
-  suggestNextStep?(id: string, hasComparison: boolean, hasReturnDate: boolean): Promise<Proposal | null>;
+  reviewReceiptImage?(id: string): Promise<string>;
   access(): Access;
   permissionStatus(requested: boolean): PermissionStatus;
   albums(): Promise<Album[]>;
   photos(album: string | null, cursor: string | null): Promise<{ items: Photo[]; next: string | null }>;
   pickPhotos(): Promise<string[]>;
+  pickReferencePhoto?(): Promise<string | null>;
+  searchReferencePhoto?(uri: string): Promise<Result[]>;
+  describeReferenceScene?(uri: string): Promise<string>;
+  searchablePlaces?(): Promise<string[]>;
   startScan(albums: string[], uris: string[]): void;
   scanStatus(): Scan;
   controlScan(action: 'pause' | 'resume' | 'cancel'): void;

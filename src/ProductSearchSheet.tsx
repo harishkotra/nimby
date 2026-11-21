@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ActionSheet } from './ActionSheet';
 import { native } from './gallery';
+import { ReadingStatus } from './ReadingStatus';
 import { googleShoppingUrl, productQuery, productQueryCandidates, visionProductQuery } from './nextStepFacts';
 import { ActionLink, Body, Button, color, ErrorText, Heading, Icon, Segments, styles } from './ui';
 
@@ -147,7 +148,7 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
     setLoading(true);
     const request = new AbortController();
     controller.current = request;
-    const timeout = setTimeout(() => request.abort(), 15_000);
+    const timeout = setTimeout(() => request.abort(), 20_000);
     try {
       const response = await fetch(endpoint, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query }), signal: request.signal,
@@ -199,8 +200,9 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
       <TextInput value={text} onChangeText={(value) => { edited.current = true; setText(value); setResults(null); setError(''); }}
         accessibilityLabel="Product name or model" placeholder="Brand and model number" placeholderTextColor={color.muted}
         maxLength={120} returnKeyType="search" autoCorrect={false} onSubmitEditing={submit} editable={!loading} style={layout.input} />
-      {!edited.current && readState !== 'done' && <Text accessibilityLiveRegion="polite" style={styles.body}>
-        {readState === 'reading' ? (reader === 'qwen' ? 'Qwen is reading the image on your phone…' : 'Reading the screenshot on your phone…') : readState === 'no-title' ?
+      {readState === 'reading' && <ReadingStatus label={reader === 'qwen' ? 'Qwen is reading this image on your phone' : 'Reading the screenshot on your phone'} />}
+      {!edited.current && (readState === 'no-title' || readState === 'unavailable') && <Text accessibilityLiveRegion="polite" style={styles.body}>
+        {readState === 'no-title' ?
           'Couldn’t find a product name in this screenshot. You can enter it above.' :
           'Couldn’t read this screenshot. You can enter the product name above.'}
       </Text>}

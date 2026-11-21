@@ -2,21 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Linking, PermissionsAndroid, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ActionMenu, ActionSheet } from './ActionSheet';
 import { useDialog } from './Dialogs';
-import { native, type DecisionModelStatus, type FollowUpAction, type Proposal, type Result } from './gallery';
-import { dateInput, localDate, receiptFacts, relatedShopping, reminderDate, shoppingFacts, type NextStepKind, type NextStepPhoto } from './nextStepFacts';
+import { native, type ProductVisionStatus, type FollowUpAction, type Result } from './gallery';
+import { dateInput, localDate, receiptFacts, receiptSuggestion, type ReceiptSuggestion, relatedShopping, reminderDate, shoppingFacts, type NextStepKind, type NextStepPhoto } from './nextStepFacts';
 import { PhotoTile } from './PhotoGrid';
 import { ProductSearchSheet } from './ProductSearchSheet';
+import { ReadingStatus } from './ReadingStatus';
 import { ActionLink, Body, Button, color, EmptyState, ErrorText, Heading, Segments, styles } from './ui';
 
 const sections = [{ value: 'shopping', label: 'Shopping' }, { value: 'receipt', label: 'Receipts' }] as const;
-const proposalCopy: Record<Proposal, string> = {
-  compare_products: 'Compare your saved options',
-  revisit_product: 'Revisit this saved product',
-  suggest_return_reminder: 'Set a reminder for the return deadline',
-  review_receipt: 'Review this receipt for filing or reimbursement',
-  show_nothing: 'No next step suggested for this photo',
-};
-
 function details(item: NextStepPhoto) {
   const captured = item.captured ? new Date(item.captured).toLocaleDateString() : null;
   if (item.kind === 'shopping') {
@@ -32,7 +25,7 @@ async function requestNotifications() {
   return await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS) === PermissionsAndroid.RESULTS.GRANTED;
 }
 
-function ModelControls({ status, refresh, scanning }: { status: DecisionModelStatus; refresh: () => void; scanning: boolean }) {
+function ModelControls({ status, refresh, scanning }: { status: ProductVisionStatus; refresh: () => void; scanning: boolean }) {
   const show = useDialog();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -40,34 +33,38 @@ function ModelControls({ status, refresh, scanning }: { status: DecisionModelSta
     setBusy(true);
     setError('');
     try {
-      if (install) await native?.installFunctionGemma?.();
-      else await native?.removeFunctionGemma?.();
-    } catch { setError(install ? 'Could not download FunctionGemma. Check your connection and free storage.' : 'Could not remove FunctionGemma.'); }
-    finally { setBusy(false); refresh(); }
+      if (install) await native?.installProductVision?.();
+      else await native?.removeProductVision?.();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : install ? 'Could not download Qwen.' : 'Could not remove Qwen.');
+    } finally { setBusy(false); refresh(); }
   }
-  const downloading = busy && status.phase === 'downloading';
+  const downloading = status.phase === 'downloading';
   useEffect(() => {
-    if (!busy) return;
+    if (!busy && status.phase === 'idle') return;
     const timer = setInterval(refresh, 700);
     return () => clearInterval(timer);
-  }, [busy, refresh]);
+  }, [busy, refresh, status.phase]);
+  const progress = Math.min(100, Math.floor(100 * status.received / status.total));
 
   return <View style={layout.panel}>
-    <Heading>FunctionGemma 270M</Heading>
-    <Body>{status.downloaded ? 'Downloaded. Helps pick product names and suggest receipt follow-ups on this phone.' :
-      'Download the 284 MB model for help with product names and receipt follow-ups.'}</Body>
-    {status.lastInferenceMs != null && <Body>Last inference took {status.lastInferenceMs.toLocaleString()} ms.</Body>}
-    {downloading && <Text accessibilityLiveRegion="polite" style={styles.body}>
-      Downloading · {(status.bytes / 1_000_000).toFixed(0)} MB received
-    </Text>}
-    {(error || status.issue) && <ErrorText>{error || status.issue}</ErrorText>}
-    {status.supported ? <View style={styles.row}>
-      {status.downloaded ? <ActionLink label="Remove model" danger disabled={busy || status.phase !== 'idle'} run={() => show({
-        title: 'Remove FunctionGemma?', message: 'This frees model storage. Your photos and reminders stay in Nimby.',
-        action: { label: 'Remove model', destructive: true, run: () => void update(false) },
-      })} /> : <Button label={busy ? 'Downloading…' : 'Download model'} disabled={busy || scanning} run={() => void update(true)} />}
-      <ActionLink label="Gemma terms" run={() => void Linking.openURL('https://ai.google.dev/gemma/terms').catch(() => setError('Could not open the model terms.'))} />
-    </View> : <Body>FunctionGemma needs a supported 64-bit Android device.</Body>}
+    <Heading>Qwen vision</Heading>
+    <Body>{status.supported ? status.installed ?
+      'Downloaded. Reads product screenshots and reviews receipts on this phone.' :
+      'This optional download reads product screenshots and reviews receipts on your phone.' :
+      'Qwen needs a compatible 64-bit Android phone with enough memory.'}</Body>
+    {!!error && <ErrorText>{error}</ErrorText>}
+    {downloading ? <View style={styles.row}>
+      <Text accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: progress }} style={styles.body}>
+        Downloading · {progress}%
+      </Text>
+      <ActionLink label="Cancel download" run={() => native?.cancelProductVisionDownload?.()} />
+    </View> : status.supported && (status.installed ?
+      <ActionLink label="Remove download" danger disabled={busy || status.phase !== 'idle'} run={() => show({
+        title: 'Remove Qwen?', message: 'This frees model storage. Your photos and reminders stay in Nimby.',
+        action: { label: 'Remove download', destructive: true, run: () => void update(false) },
+      })} /> : <ActionLink label={busy ? 'Preparing download…' : 'Download Qwen · 1.3 GB'}
+        disabled={busy || scanning} run={() => void update(true)} />)}
   </View>;
 }
 
@@ -84,17 +81,17 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
   const [searchProduct, setSearchProduct] = useState<NextStepPhoto | null>(null);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('09:00');
-  const [model, setModel] = useState(() => native?.functionGemmaStatus?.());
+  const [model, setModel] = useState(() => native?.productVisionStatus?.());
   const [notifications, setNotifications] = useState(() => native?.nextStepNotificationStatus?.());
   const [options, setOptions] = useState(false);
-  const [proposal, setProposal] = useState<{ id: string; action: Proposal | null } | null>(null);
-  const [asking, setAsking] = useState(false);
+  const [proposal, setProposal] = useState<{ id: string; action: ReceiptSuggestion | null } | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [retry, setRetry] = useState(0);
   const [message, setMessage] = useState('');
-  const refreshModel = useCallback(() => setModel(native?.functionGemmaStatus?.()), []);
+  const refreshModel = useCallback(() => setModel(native?.productVisionStatus?.()), []);
   const refreshNotifications = () => setNotifications(native?.nextStepNotificationStatus?.());
   const initialized = useRef(false);
   const handledTarget = useRef<string | null>(null);
@@ -184,15 +181,16 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
   }
 
   async function ask(item: NextStepPhoto) {
-    setAsking(true);
+    if (asking || !native?.reviewReceiptImage) return;
+    setAsking(item.photo.id);
+    setProposal(null);
     setError('');
     try {
       const dateFromPhoto = localDate(receiptFacts(item.text).returnBy ?? '');
-      const answer = await native?.suggestNextStep?.(item.photo.id, related.length > 0,
-        Boolean(dateFromPhoto && dateFromPhoto.getTime() > Date.now()));
-      setProposal({ id: item.photo.id, action: answer ?? null });
-    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not run FunctionGemma.'); }
-    finally { setAsking(false); refreshModel(); }
+      const answer = await native.reviewReceiptImage(item.photo.id);
+      setProposal({ id: item.photo.id, action: receiptSuggestion(answer, Boolean(dateFromPhoto && dateFromPhoto.getTime() > Date.now())) });
+    } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not review this receipt with Qwen.'); }
+    finally { setAsking(null); refreshModel(); }
   }
 
   function toggle(id: string) {
@@ -279,17 +277,17 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
             {item.kind === 'shopping' ? <Button label="Find buying links" icon="search" run={() => setSearchProduct(item)} /> :
               <Button label={item.state ? 'Change reminder' :
               item.kind === 'receipt' && receiptFacts(item.text).returnBy ? 'Set return reminder' : 'Set reminder'} run={() => startReminder(item)} />}
-            <View style={styles.between}>
+            <View style={layout.followUpActions}>
               {item.kind === 'shopping' && related.length > 0 && <ActionLink label={`Compare ${related.length + 1} saved options`} run={() => {
                 setSelection([item.photo.id, ...related.map(({ photo }) => photo.id)]);
                 setComparing(true);
               }} />}
-              {item.kind === 'receipt' && model?.downloaded && <ActionLink label={asking ? 'Asking FunctionGemma…' : 'Ask FunctionGemma'} disabled={asking || scanning}
-                run={() => void ask(item)} />}
-              <ActionMenu title="Follow-up actions" label="More follow-up actions" overflow disabled={busy} options={[
+              <ActionMenu title="Follow-up actions" label="More actions" disabled={busy} options={[
                 ...(item.kind === 'shopping' ? [{ label: item.state ? 'Change reminder' : 'Set reminder', run: () => startReminder(item) }] : []),
                 ...(item.state ? [{ label: 'Cancel reminder', run: () => void save(item, 'cancel') }] : []),
                 ...(item.kind === 'receipt' ? [
+                  ...(model?.installed && native?.reviewReceiptImage && !asking && !scanning ?
+                    [{ label: 'Review with Qwen', run: () => void ask(item) }] : []),
                   { label: 'Keep for reimbursement', run: () => fileReceipt(item) },
                   { label: 'Mark follow-up complete', run: () => void save(item, 'done') },
                 ] : []),
@@ -297,8 +295,14 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
                 { label: 'Dismiss suggestion', run: () => void save(item, 'dismissed') },
               ]} />
             </View>
-            {proposal?.id === item.photo.id && <Body>{proposal.action ? proposalCopy[proposal.action] :
-              'FunctionGemma returned no supported action. You can still choose a follow-up above.'}</Body>}
+            {asking === item.photo.id && <ReadingStatus label="Qwen is reading this receipt on your phone" />}
+            {proposal?.id === item.photo.id && <View style={layout.suggestion}>
+              <Body>{proposal.action === 'return_reminder' ? 'Qwen suggests a reminder for the return deadline shown on this receipt.' :
+                proposal.action === 'review_receipt' ? 'Qwen suggests reviewing this receipt for reimbursement.' :
+                'Qwen didn’t find a follow-up to suggest.'}</Body>
+              {proposal.action === 'return_reminder' && <ActionLink label="Review return reminder" run={() => startReminder(item)} />}
+              {proposal.action === 'review_receipt' && <ActionLink label="Keep for reimbursement" run={() => fileReceipt(item)} />}
+            </View>}
           </View>}
         </View>;
       }} />
@@ -320,7 +324,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
       </View>
     </ActionSheet>}
     {searchProduct && <ProductSearchSheet key={searchProduct.photo.id} imageId={searchProduct.photo.id}
-      screenshotText={searchProduct.text} close={() => setSearchProduct(null)} />}
+      screenshotText={searchProduct.text} close={() => { setSearchProduct(null); refreshModel(); }} />}
   </View>;
 }
 
@@ -329,6 +333,8 @@ const layout = StyleSheet.create({
   panel: { backgroundColor: color.white, borderRadius: 16, padding: 16, gap: 8 },
   photoRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   thumb: { width: 72 },
+  followUpActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 20 },
+  suggestion: { gap: 4 },
   compareRow: { gap: 12 },
   compareTile: { flex: 1, gap: 8 },
   footer: { paddingHorizontal: 20, paddingVertical: 12, backgroundColor: color.paper },

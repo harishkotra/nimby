@@ -786,6 +786,12 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         return sql.toString() to args.toTypedArray()
     }
 
+    fun searchablePlaces(): List<String> = readableDatabase.rawQuery("""
+        SELECT details.place FROM memory_details details JOIN images ON images.id = details.image_id
+        WHERE details.place IS NOT NULL AND images.status = 'complete' AND images.decision != 'dismissed' AND $visible
+        GROUP BY details.place COLLATE NOCASE ORDER BY COUNT(*) DESC, details.place COLLATE NOCASE LIMIT 100
+    """, null).use { row -> buildList { while (row.moveToNext()) add(row.getString(0)) } }
+
     fun memoryPlace(imageId: String): String? = readableDatabase.rawQuery(
         "SELECT place FROM memory_details WHERE image_id = ?", arrayOf(imageId)
     ).use { row -> if (row.moveToFirst()) row.getString(0) else null }
@@ -1101,14 +1107,25 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             ?: return emptyList()
         val duplicateThreshold = JSONObject(original.third).optJSONObject("duplicates")?.optDouble("similarity")
             ?.takeIf { it in 0.0..1.0 } ?: 0.97
+        return similarTo(original.second, original.first, id, duplicateThreshold)
+    }
+
+    fun similarToReference(uri: Uri, embedding: FloatArray): List<Map<String, Any?>> {
+        val indexedId = readableDatabase.rawQuery("SELECT image_id FROM sources WHERE uri = ?",
+            arrayOf(uri.toString())).use { if (it.moveToFirst()) it.getLong(0) else null }
+        return similarTo(embedding, EYE_VERSION, indexedId, null)
+    }
+
+    private fun similarTo(reference: FloatArray, engine: String, excludedId: Long?, duplicateThreshold: Double?): List<Map<String, Any?>> {
+        val db = readableDatabase
         data class Match(val id: Long, val score: Double)
         val best = PriorityQueue<Match>(compareBy { it.score })
         db.rawQuery(
             "SELECT id, embedding FROM images WHERE id != ? AND engine = ? AND status = 'complete' AND embedding IS NOT NULL AND decision != 'dismissed' AND $visible",
-            arrayOf(id.toString(), original.first)
+            arrayOf((excludedId ?: -1).toString(), engine)
         ).use { row ->
             while (row.moveToNext()) {
-                val score = cosine(original.second, vector(row.getBlob(1)))
+                val score = cosine(reference, vector(row.getBlob(1)))
                 if (score < 0.60) continue
                 best.add(Match(row.getLong(0), score))
                 if (best.size > 24) best.poll()
@@ -1121,7 +1138,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                 val photo = entry(match.id, row.getString(0), row.getDouble(1).takeUnless { row.isNull(1) },
                     row.getString(2), row.getString(3), row.getString(4), row.getString(5))
                 if (photo["uri"] == null) null
-                else photo + mapOf("similarity" to match.score, "nearDuplicate" to (match.score >= duplicateThreshold))
+                else photo + mapOf("similarity" to match.score, "nearDuplicate" to duplicateThreshold?.let { match.score >= it })
             }
         }.take(8)
     }

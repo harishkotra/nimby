@@ -95,12 +95,36 @@ function findDate(query: string, now: Date): { range: RecallDate; matched: strin
   return null;
 }
 
-export function parseRecallQuery(query: string, now = new Date()): RecallRequest {
+function namedPlace(query: string, places: readonly string[]) {
+  for (const place of [...places].sort((left, right) => right.length - left.length)) {
+    const escaped = place.replace(/[.*+?${}()|[\]\\]/g, '\\$&');
+    const match = new RegExp(`\\b(?:in|at|near|from)\\s+${escaped}(?=$|[\\s,.!?])`, 'iu').exec(query);
+    if (match) return { match: match[0], place };
+  }
+  return null;
+}
+
+export function visionSceneTerms(reply: string): string[] {
+  try {
+    const content = reply.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1');
+    const terms = JSON.parse(content)?.terms;
+    if (!Array.isArray(terms)) return [];
+    return [...new Set(terms.slice(0, 3).flatMap((value: unknown) => {
+      if (typeof value !== 'string' || value.length > 48) return [];
+      const term = value.trim().toLowerCase();
+      return /^[a-z]+(?:[ -][a-z]+){0,2}$/.test(term) ? [term] : [];
+    }))];
+  } catch { return []; }
+}
+
+export function parseRecallQuery(query: string, now = new Date(), savedPlaces: readonly string[] = []): RecallRequest {
   let terms = query.trim().slice(0, 256);
   const date = findDate(terms, now);
   if (date) terms = terms.replace(date.matched, ' ');
-  const location = terms.match(/\bplace:\s*(?:"([^"]{1,64})"|([^\s,"]{1,64}))/i);
-  if (location) terms = terms.replace(location[0], ' ');
+  const location = terms.match(/\bplace:\s*(?:"([^"]{1,80})"|([^\s,"]{1,80}))/i);
+  const remembered = location ? null : namedPlace(terms, savedPlaces);
+  const locationPhrase = location?.[0] ?? remembered?.match;
+  if (locationPhrase) terms = terms.replace(locationPhrase, ' ');
 
   let category: string | null = null;
   for (const [pattern, name] of categoryWords) {
@@ -111,12 +135,13 @@ export function parseRecallQuery(query: string, now = new Date()): RecallRequest
   }
   const textOnly = /\b(?:with text|containing text)\b/i.test(terms);
   terms = terms.replace(/\b(?:with text|containing text)\b/i, ' ')
+    .replace(/\b(?:in the background|as (?:the|a) backdrop|in (?:the|a) scene)\b/gi, ' ')
     .replace(/^\s*(?:please\s+)?(?:show me|find|look for|where are|do i have)\b/i, '')
-    .replace(/\b(?:my|me|please|photos?|pictures?|images?|from|in|on|of|the|a|an)\b/gi, ' ')
+    .replace(/\b(?:my|me|please|photos?|pictures?|images?|from|in|on|at|with|of|the|a|an)\b/gi, ' ')
     .replace(/[?!]+$/, '')
     .replace(/\s+/g, ' ').trim();
 
-  return { terms, category, date: date?.range ?? null, place: (location?.[1] ?? location?.[2])?.trim() || null, textOnly };
+  return { terms, category, date: date?.range ?? null, place: (location?.[1] ?? location?.[2] ?? remembered?.place)?.trim() || null, textOnly };
 }
 
 export function hasRecallRequest(request: RecallRequest): boolean {

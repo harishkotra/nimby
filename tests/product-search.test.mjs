@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { googleShoppingUrl, productQuery, productQueryCandidates, visionProductQuery } from '../src/nextStepFacts.ts';
+import { googleShoppingUrl, productQuery, productQueryCandidates, receiptSuggestion, visionProductQuery } from '../src/nextStepFacts.ts';
 import { matchingListings, searchListings } from '../server/product-search.mjs';
+import { createHandler } from '../server/hosted-product-search.mjs';
 
 test('product search prioritizes literal OCR model codes and excludes account text', () => {
   const ocr = 'Premium Noise Cancelling Headphones\nYour orders\nShop by brand\nSony WH-1000XM5\nname@example.com\n$399.00';
@@ -54,4 +55,40 @@ test('Tavily integration requests search results without asking for generated re
   });
   assert.equal(listings[0].store, 'camera.test');
   await assert.rejects(searchListings(query, 'test-only-key', async () => new Response(null, { status: 429 })), /quota/);
+});
+
+test('receipt vision cannot supply a reminder date or return unsupported actions', () => {
+  const request = '{"action":"return_reminder","date":"2099-01-01"}';
+  assert.equal(receiptSuggestion(request, false), null);
+  assert.equal(receiptSuggestion('{"action":"return_reminder"}', true), 'return_reminder');
+  assert.equal(receiptSuggestion('{"action":"review_receipt"}', false), 'review_receipt');
+  assert.equal(receiptSuggestion('{"action":"schedule"}', true), null);
+});
+
+test('hosted product search validates input before using the daily budget and passes only the typed query', async () => {
+  let available = true;
+  let quotaChecks = 0;
+  let calls = 0;
+  const handler = createHandler({
+    reserve: async () => { quotaChecks++; return available; },
+    getKey: async () => 'server-only-test-key',
+    search: async (query, key) => {
+      calls++;
+      assert.equal(query, 'Fujifilm X100VI');
+      assert.equal(key, 'server-only-test-key');
+      return [{ title: query }];
+    },
+  });
+  const event = { rawPath: '/product-search', requestContext: { http: { method: 'POST' } },
+    headers: { 'content-type': 'application/json; charset=utf-8' }, body: '{"query":"  Fujifilm  X100VI "}' };
+  assert.equal((await handler({ ...event, body: '{"query":"Fujifilm X100VI","image":"photo.jpg"}' })).statusCode, 400);
+  assert.equal((await handler({ ...event, body: '{"query":"' + 'x'.repeat(1024) + '"}' })).statusCode, 400);
+  assert.equal((await handler({ ...event, headers: { ...event.headers, origin: 'https://example.test' } })).statusCode, 415);
+  assert.equal(quotaChecks, 0);
+  const result = await handler(event);
+  assert.equal(result.statusCode, 200);
+  assert.deepEqual(JSON.parse(result.body), { listings: [{ title: 'Fujifilm X100VI' }] });
+  available = false;
+  assert.equal((await handler(event)).statusCode, 429);
+  assert.equal(calls, 1);
 });

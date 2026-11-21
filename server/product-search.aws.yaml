@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Nimby retailer search accepts confirmed product names and keeps the Tavily credential in AWS Secrets Manager.
+Metadata:
+  AWSToolsMetrics:
+    AWSAgentToolkit: aws-cloudformation@3
+Parameters:
+  TavilySecretArn:
+    Type: String
+    AllowedPattern: 'arn:[a-z0-9-]+:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:.+'
+    Description: ARN of a Secrets Manager secret containing only the Tavily API key.
+  DailySearchLimit:
+    Type: Number
+    Default: 60
+    MinValue: 1
+    MaxValue: 1000
+Resources:
+  SearchApi:
+    Type: AWS::Serverless::HttpApi
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Serves Android directly while Amplify hosts the static landing page.
+        must: [The public route accepts a product query only and has request throttling.]
+    Properties:
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 4
+        ThrottlingRateLimit: 2
+  SearchQuota:
+    Type: AWS::DynamoDB::Table
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Bounds total paid retailer searches across concurrent requests.
+        must: [Stores a UTC day and count only. Counters expire automatically.]
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: day
+          AttributeType: S
+      KeySchema:
+        - AttributeName: day
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires
+        Enabled: true
+  RetailerSearch:
+    Type: AWS::Serverless::Function
+    Metadata:
+      com.aws.cloudformation.Context:
+        why: Reuses the same listing filters as the development server.
+        must: [Keeps key and query text out of logs and fails closed if the quota cannot be checked.]
+    Properties:
+      Runtime: nodejs22.x
+      Handler: hosted-product-search.handler
+      CodeUri: .
+      MemorySize: 256
+      Timeout: 16
+      Environment:
+        Variables:
+          QUOTA_TABLE: !Ref SearchQuota
+          DAILY_LIMIT: !Ref DailySearchLimit
+          TAVILY_SECRET_ARN: !Ref TavilySecretArn
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action: dynamodb:UpdateItem
+              Resource: !GetAtt SearchQuota.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref TavilySecretArn
+      Events:
+        Search:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref SearchApi
+            Path: /product-search
+            Method: POST
+Outputs:
+  ProductSearchUrl:
+    Value: !Sub 'https://${SearchApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/product-search'

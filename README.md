@@ -17,7 +17,7 @@ Nimby is an Android photo review app that helps you rediscover useful things you
 ## What it does
 
 - Scan the accessible gallery, individual albums, or photos chosen through Android’s system picker.
-- **Recall** finds photos by Eye labels, dates, saved places, or text on screenshots and documents. An optional English voice pack transcribes queries locally.
+- **Recall** finds photos by Eye scene labels, dates, saved places, or text on screenshots and documents. **Search by photo** compares a reference selected in Android’s picker with scanned photos. An optional English voice pack transcribes queries locally.
 - **Photo Map** shows where you took your photos on a bundled worldwide OpenStreetMap basemap. GPS extraction from photos is opt-in. Add a place name from a photo’s actions to make it searchable.
 - **Timeline and Discover** group moments and surface recurring themes from real photos. Rename, split, merge, confirm, correct, or hide suggestions.
 - **Next steps and outcomes** compare actions grounded in photos you select. Saved outcomes help break ties in future Recall results and inform plan ranking.
@@ -51,7 +51,7 @@ flowchart LR
     Voice["Moonshine · on device"]
     Map["MapLibre · bundled OSM tiles"]
     Feedback[("PersonalMemory · local choices")]
-    Models["LiteRT-LM CPU · optional Qwen vision and FunctionGemma"]
+    Models["LiteRT-LM CPU · optional Qwen vision"]
     Jobs["WorkManager · local reminders and shopping notifications"]
     Gallery[("Android gallery")]
     Delete["Android deletion authorization"]
@@ -114,9 +114,9 @@ sequenceDiagram
 | Media | `GallerySource.kt` resolves permission-scoped MediaStore entries and system picker results. |
 | Analysis | `ScanWorker.kt` manages scan progress and cache reuse. `EyeEngine.kt` prepares the model, resizes inputs, and maps Eye output into Nimby categories. |
 | Shopping readers | `ReceiptOcr.kt` reads the original locally when the text index has no usable title. `ProductVision.kt` handles verified Qwen downloads and on-demand image inference. `ProductSearchSheet.tsx` lets users choose a reader and edit the query. |
-| Follow-ups | `NextStepNotifications.kt` schedules local notifications through WorkManager. Tapping one opens the linked follow-up. `FunctionGemma.kt` offers optional local action suggestions. |
+| Follow-ups | `NextStepNotifications.kt` schedules local notifications through WorkManager. Tapping one opens the linked follow-up. Optional Qwen receipt review proposes a follow-up for the user to confirm. |
 | Storage | `GalleryMemory.kt` owns schema migrations, Eye analysis, FTS4 text and metadata, source-specific photo locations, and the archive. Schema version 8 adds saved follow-up state and reminder due times. `PersonalMemory.kt` stores local event edits, pattern feedback, and outcomes. |
-| Retailer search | `server/product-search.mjs` is an optional, dependency-free Node proxy for Tavily. Nimby can also open Google Shopping in the browser. |
+| Retailer search | `server/` provides a local Node proxy and an AWS-hosted API for Tavily. Nimby can also open Google Shopping in the browser. |
 | Android host | `android/` contains the native app configuration, including Kotlin 2.4.20 and CPU-only LiteRT packaging. |
 
 ## On-device models
@@ -125,11 +125,17 @@ Nimby uses **Desert Ant Labs Eye Android SDK `4.3.0`** with the **`v1.0.0` Eye w
 
 Recall uses [Tesseract4Android](https://github.com/adaptech-cz/Tesseract4Android) with bundled English [`tessdata_fast`](https://github.com/tesseract-ocr/tessdata_fast) and SQLite FTS4. English voice uses [Moonshine Tiny Streaming](https://github.com/moonshine-ai/moonshine/blob/main/docs/models/available-models.md) on Android 8 or later. Nimby downloads the public voice pack on request, validates each file with SHA-256, then transcribes offline. Users need no Hugging Face token. Photo Map draws a bundled, low-zoom basemap with [MapLibre Native](https://maplibre.org/maplibre-native/android/examples/data/PMTiles/) and [OpenStreetMap attribution](modules/nimby-gallery/android/src/main/assets/photo-map/NOTICE.md).
 
-**Next steps → Options → Download model** installs the public [FunctionGemma 270M Mobile Actions Q8 package](https://huggingface.co/litert-community/functiongemma-mobile-actions_q8_ekv1024.litertlm) under the [Gemma terms](https://ai.google.dev/gemma/terms). The app pins its revision and verifies its SHA-256 before using it. A Hugging Face token is unnecessary. The model runs on the CPU via LiteRT-LM and can propose only supported actions or decline to make a suggestion. Shopping comparison and receipt follow-ups are also usable without the optional model.
+**Next steps → Options → Download Qwen** installs the optional shared vision model. A Hugging Face token is unnecessary. Qwen reads selected shopping screenshots, reviews receipts, and suggests scene search terms from a reference photo. Scans, typed search, shopping comparison, and receipt reminders work without that download.
+
+### Search by location, scene, or reference photo
+
+- **Search → Filters → Place** uses names you saved on photos. A query like “wedding photos in Goa” uses Goa as a location filter when it’s a saved place. **Browse GPS locations on Photo Map** opens the opt-in map for photos with coordinates.
+- Try visible details such as “beach”, “wedding”, or “brick wall”. Recall searches locally indexed Eye labels and recognized text.
+- **Search → Search by photo** opens Android’s picker and uses one photo as a temporary visual reference. Eye compares its embedding to scanned photos. With Qwen installed, **Suggest search terms** offers scene details to use in Recall. Person matching would require a separate face-matching model.
 
 ### Follow-ups and reminders
 
-Open **Explore → Shopping and receipt follow-ups**. Under **Shopping**, select up to four saved products to compare. Under **Receipts**, review a saved receipt, file it in **Reimbursements**, or choose a reminder time. Shopping notifications can be enabled separately under **Options** and arrive at most once a week.
+Open **Explore → Shopping and receipt follow-ups**. Under **Shopping**, select up to four saved products to compare. Under **Receipts**, review a saved receipt, file it in **Reimbursements**, or choose a reminder time. **More actions → Review with Qwen** can suggest a follow-up when the model is installed. A return reminder suggestion requires a future deadline already read from the receipt. Shopping notifications can be enabled separately under **Options** and arrive at most once a week.
 
 Nimby stores reminders and follow-up decisions in SQLite and uses Android WorkManager for delivery. Delivery times are approximate. A notification opens the saved photo’s follow-up in Nimby. The notification body uses generic text to keep product and receipt details private.
 
@@ -162,7 +168,15 @@ TAVILY_API_KEY=your-tavily-key
 EXPO_PUBLIC_PRODUCT_SEARCH_URL=http://127.0.0.1:8787/product-search
 ```
 
-Run `npm run product-search` in a separate terminal, then run `adb reverse tcp:8787 tcp:8787` for the connected Android target and reload Nimby through Metro. The loopback proxy keeps the API key on the host. A distributed build can point to an HTTPS proxy with an authenticated, rate-limited deployment. Keep `TAVILY_API_KEY` in that server's environment. Tavily returns candidate product pages. Verify the exact variant and availability on the retailer's website.
+Run `npm run product-search` in a separate terminal, then run `adb reverse tcp:8787 tcp:8787` for the connected Android target and reload Nimby through Metro. The loopback proxy keeps the API key on the host. Tavily returns candidate product pages. Verify the exact variant and availability on the retailer’s website.
+
+For a demo with no local retailer-search server, deploy the companion [AWS API](server/product-search.aws.yaml) using AWS CLI v2, AWS SAM CLI, and a profile authorized to deploy the stack:
+
+```sh
+AWS_PROFILE=nimby bash server/deploy-product-search.sh
+```
+
+The deploy script uses `TAVILY_API_KEY` from the gitignored `.env` to create an AWS Secrets Manager secret when one doesn’t exist. The Lambda reads that credential on the server. API Gateway throttles requests and DynamoDB enforces a shared daily search limit. Set `EXPO_PUBLIC_PRODUCT_SEARCH_URL` in `.env` to the printed HTTPS endpoint and restart Metro or rebuild for distribution. The [Amplify landing page](landing/README.md) is deployed separately.
 
 ## Run on Android
 

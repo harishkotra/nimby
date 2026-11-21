@@ -247,10 +247,38 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
     }
 
     @Synchronized
-    private fun beginEyeCheck() {
-        check(task?.isCompleted != false) { "Finish or cancel the photo scan before checking Eye." }
-        check(eyeCheck.phase != "running") { "Eye is already being checked." }
+    private fun beginEyeCheck(): EyeCheck {
+        check(task?.isCompleted != false) { "Finish or cancel the photo scan before using Eye." }
+        check(eyeCheck.phase != "running") { "Eye is already processing an image." }
+        val previous = eyeCheck
         eyeCheck = EyeCheck("running")
+        return previous
+    }
+
+    suspend fun referenceEmbedding(uri: Uri): FloatArray {
+        val previous = beginEyeCheck()
+        try {
+            EyeEngine(context).use { engine ->
+                engine.prepare()
+                eyeLoaded = true
+                val bitmap = decodePhoto(context.contentResolver, uri)
+                val output = try { infer(engine, bitmap) } finally { bitmap.recycle() }
+                return checkNotNull(output.embedding?.takeIf { it.size == 512 && it.all(Float::isFinite) }) {
+                    "Eye couldn’t create a visual match for this photo."
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Log.w("NimbyEye", "Could not compare a reference photo", error)
+            throw IllegalStateException("Eye couldn’t compare this photo. Check that Eye works in Settings.", error)
+        } catch (error: LinkageError) {
+            Log.w("NimbyEye", "Could not start Eye for a reference photo", error)
+            throw IllegalStateException("Eye couldn’t start on this phone.", error)
+        } finally {
+            eyeLoaded = false
+            eyeCheck = previous
+        }
     }
 
     suspend fun runEyeCheck() {

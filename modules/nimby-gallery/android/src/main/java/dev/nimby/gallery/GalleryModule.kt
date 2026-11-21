@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
+import java.io.File
 
 class GalleryModule : Module() {
     private val context get() = requireNotNull(appContext.reactContext).applicationContext
@@ -26,11 +27,12 @@ class GalleryModule : Module() {
     private val worker get() = scan.value
     private val voiceEngine = lazy { VoiceRecall(context) }
     private val personal by lazy { PersonalMemory(context, memory) }
-    private val functionGemma = lazy { FunctionGemma(context) }
     private val productVision by lazy { ProductVision(context) }
     private val modelInference = Mutex()
     private val followUps by lazy { NextStepNotifications(context) }
     private val picker = PickMultipleVisualMedia()
+    private val referencePicker = PickVisualMedia()
+    @Volatile private var referenceUri: Uri? = null
     private var pickerPromise: Promise? = null
     @Volatile private var deletionPending = false
     private var deletion: Pair<Promise, List<ArchivedPhoto>>? = null
@@ -78,6 +80,21 @@ class GalleryModule : Module() {
             }
         }.runOnQueue(Queues.MAIN)
 
+        AsyncFunction("pickReferencePhoto") { promise: Promise ->
+            val activity = appContext.currentActivity
+            if (activity == null || pickerPromise != null) {
+                promise.reject("PICKER_UNAVAILABLE", "The photo picker is already open or unavailable.", null)
+            } else {
+                try {
+                    pickerPromise = promise
+                    activity.startActivityForResult(referencePicker.createIntent(activity, PickVisualMediaRequest(PickVisualMedia.ImageOnly)), REFERENCE_REQUEST)
+                } catch (error: Exception) {
+                    pickerPromise = null
+                    promise.reject("PICKER_UNAVAILABLE", "Android could not open the photo picker.", error)
+                }
+            }
+        }.runOnQueue(Queues.MAIN)
+
         OnActivityResult { _, payload ->
             if (payload.requestCode == PICK_REQUEST) {
                 val promise = pickerPromise
@@ -93,6 +110,12 @@ class GalleryModule : Module() {
                     }
                     promise?.resolve(selected.map(Uri::toString))
                 }
+            }
+            if (payload.requestCode == REFERENCE_REQUEST) {
+                val promise = pickerPromise
+                pickerPromise = null
+                referenceUri = referencePicker.parseResult(payload.resultCode, payload.data)
+                promise?.resolve(referenceUri?.toString())
             }
             if (payload.requestCode == DELETE_REQUEST) {
                 val request = deletion
@@ -135,6 +158,14 @@ class GalleryModule : Module() {
             worker.requestMemoryBackfill()
             appContext.backgroundCoroutineScope.launch(Dispatchers.IO) { runCatching { followUps.recover(memory) } }
         }
+        OnCreate {
+            appContext.backgroundCoroutineScope.launch(Dispatchers.IO) {
+                val app = appContext.reactContext?.applicationContext ?: return@launch
+                val retiredModels = File(app.noBackupFilesDir, "functiongemma")
+                File(retiredModels, "mobile-actions-q8-92109695f911d1872fa8ae07c1e3ff0ed70f2c3d1690d410ec6db8587c2ab409.litertlm").delete()
+                File(retiredModels, "functiongemma.part").delete()
+            }
+        }
 
         AsyncFunction("nextSteps") Coroutine { id: String? ->
             withContext(Dispatchers.IO) {
@@ -161,13 +192,6 @@ class GalleryModule : Module() {
                     else -> error("Unknown follow-up action.")
                 }
             }
-        }
-        Function("functionGemmaStatus") { -> functionGemma.value.status() }
-        AsyncFunction("installFunctionGemma") Coroutine { ->
-            withContext(Dispatchers.IO) { functionGemma.value.install() }
-        }
-        AsyncFunction("removeFunctionGemma") Coroutine { ->
-            withContext(Dispatchers.IO) { functionGemma.value.remove() }
         }
         AsyncFunction("readShoppingText") Coroutine { id: String ->
             withContext(Dispatchers.IO) {
@@ -196,17 +220,45 @@ class GalleryModule : Module() {
                 } finally { modelInference.unlock() }
             }
         }
-        AsyncFunction("suggestNextStep") Coroutine { id: String, hasComparison: Boolean, hasReturnDate: Boolean ->
+        AsyncFunction("reviewReceiptImage") Coroutine { id: String ->
             withContext(Dispatchers.IO) {
                 check(modelInference.tryLock()) { "Wait for the current suggestion to finish." }
                 try {
                     check(worker.status()["phase"] !in listOf("preparing", "running", "matching", "paused")) {
-                        "Finish your gallery scan before asking FunctionGemma."
+                        "Finish your gallery scan before using Qwen."
                     }
-                    val kind = memory.nextStep(id)?.get("kind") as? String ?: return@withContext null
-                    functionGemma.value.suggest(kind, hasComparison, hasReturnDate)
+                    val imageId = id.toLongOrNull()
+                    check(imageId != null && memory.nextStep(id)?.get("kind") == "receipt") {
+                        "This receipt is no longer available."
+                    }
+                    val uri = memory.available(imageId) ?: error("This receipt is no longer accessible.")
+                    productVision.reviewReceipt(uri)
                 } finally { modelInference.unlock() }
             }
+        }
+
+        AsyncFunction("searchReferencePhoto") Coroutine { uri: String ->
+            withContext(Dispatchers.IO) {
+                check(modelInference.tryLock()) { "Wait for the current image to finish." }
+                try {
+                    val reference = checkedReference(uri)
+                    memory.similarToReference(reference, worker.referenceEmbedding(reference))
+                } finally { modelInference.unlock() }
+            }
+        }
+        AsyncFunction("describeReferenceScene") Coroutine { uri: String ->
+            withContext(Dispatchers.IO) {
+                check(modelInference.tryLock()) { "Wait for the current image to finish." }
+                try {
+                    check(worker.status()["phase"] !in listOf("preparing", "running", "matching", "paused")) {
+                        "Finish your gallery scan before using Qwen."
+                    }
+                    productVision.describeScene(checkedReference(uri))
+                } finally { modelInference.unlock() }
+            }
+        }
+        AsyncFunction("searchablePlaces") Coroutine { ->
+            withContext(Dispatchers.IO) { memory.searchablePlaces() }
         }
 
         AsyncFunction("requestMemoryBackfill") Coroutine { ->
@@ -386,8 +438,13 @@ class GalleryModule : Module() {
         }
     }
 
+    private fun checkedReference(uri: String): Uri = checkNotNull(
+        referenceUri?.takeIf { it.toString() == uri && gallery.readable(it) }
+    ) { "Choose the reference photo again. Android no longer allows access to it." }
+
     private companion object {
         const val PICK_REQUEST = 0x4e42
+        const val REFERENCE_REQUEST = 0x4e48
         const val DELETE_REQUEST = 0x4e43
     }
 }

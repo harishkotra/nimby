@@ -58,6 +58,18 @@ export function visionProductQuery(reply: string): string {
   } catch { return ''; }
 }
 
+export type ReceiptSuggestion = 'return_reminder' | 'review_receipt';
+
+export function receiptSuggestion(reply: string, hasFutureDeadline: boolean): ReceiptSuggestion | null {
+  try {
+    const raw = reply.trim().replace(/^```(?:json)?\s*([\s\S]*?)\s*```$/i, '$1');
+    const action = JSON.parse(raw)?.action;
+    if (action === 'review_receipt') return action;
+    if (action === 'return_reminder' && hasFutureDeadline) return action;
+  } catch { /* The model declined or returned an unsupported format. */ }
+  return null;
+}
+
 export function googleShoppingUrl(query: string): string {
   return `https://www.google.com/search?tbm=shop&q=${encodeURIComponent(query)}`;
 }

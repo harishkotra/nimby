@@ -2,7 +2,8 @@ import { ActionSheet } from './ActionSheet';
 import { VoiceSearch } from './VoiceSearch';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, StyleSheet, Text, TextInput, View } from 'react-native';
-import type { Result } from './gallery';
+import { native, type Result } from './gallery';
+import { ReferenceSearchSheet } from './ReferenceSearchSheet';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
 import {
   emptyRecallRequest, hasRecallRequest, parseRecallQuery, recallCategories, recallDateLabels, recallDateRange,
@@ -16,14 +17,19 @@ type Props = {
   active: boolean;
   indexed: number | null;
   scan: () => void;
+  openMap: () => void;
   search: RecallSearch;
   status?: () => Promise<RecallStatus>;
   startBackfill?: () => void | Promise<unknown>;
 };
 
 type Hit = RecallPage['items'][number];
-export function RecallScreen({ revision, open, active, indexed, scan, search, status, startBackfill }: Props) {
+export function RecallScreen({ revision, open, active, indexed, scan, openMap, search, status, startBackfill }: Props) {
   const [query, setQuery] = useState('');
+  const [places, setPlaces] = useState<string[]>([]);
+  const [reference, setReference] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [pickerError, setPickerError] = useState('');
   const [request, setRequest] = useState<RecallRequest>(emptyRecallRequest);
   const [draft, setDraft] = useState<RecallRequest | null>(null);
   const [items, setItems] = useState<Hit[]>([]);
@@ -62,6 +68,30 @@ export function RecallScreen({ revision, open, active, indexed, scan, search, st
       clearTimeout(timer);
     };
   }, [revision, startBackfill, status]);
+
+  useEffect(() => {
+    if (!active) return;
+    let current = true;
+    native?.searchablePlaces?.().then((names) => { if (current) setPlaces(names); }).catch(() => {});
+    return () => { current = false; };
+  }, [active, revision]);
+
+  async function chooseReference() {
+    if (picking || !native?.pickReferencePhoto) return;
+    Keyboard.dismiss();
+    setPicking(true);
+    setPickerError('');
+    try { setReference(await native.pickReferencePhoto()); }
+    catch { setPickerError('Could not open Android’s photo picker. Try again.'); }
+    finally { setPicking(false); }
+  }
+
+  function tryQuery(value: string) {
+    setQuery(value);
+    lastSubmitted.current = value;
+    setTypedSearchDone(true);
+    setRequest(parseRecallQuery(value, new Date(), places));
+  }
 
   const loadPage = useCallback(async (offset: number) => {
     if (!hasRequest || inFlight.current) return;
@@ -104,8 +134,9 @@ export function RecallScreen({ revision, open, active, indexed, scan, search, st
       if (hasRequest) setRequest({ ...request });
       return;
     }
-    const previous = parseRecallQuery(lastSubmitted.current);
-    const parsed = parseRecallQuery(text);
+    const now = new Date();
+    const previous = parseRecallQuery(lastSubmitted.current, now, places);
+    const parsed = parseRecallQuery(text, now, places);
     lastSubmitted.current = text;
     setRequest({
       ...parsed,
@@ -141,17 +172,17 @@ export function RecallScreen({ revision, open, active, indexed, scan, search, st
           style={layout.searchInput}
         />
       </VoiceSearch>
-      <ActionLink label="Filters" run={() => { Keyboard.dismiss(); setDraft({ ...request }); }} />
+      <View style={layout.searchActions}>
+        <ActionLink label="Filters" run={() => { Keyboard.dismiss(); setDraft({ ...request }); }} />
+        {!!native?.pickReferencePhoto && !!native.searchReferencePhoto && <ActionLink label="Search by photo"
+          disabled={picking} run={() => void chooseReference()} />}
+      </View>
+      {!!pickerError && <ErrorText>{pickerError}</ErrorText>}
       {!hasRequest && <View style={layout.suggestions}>
         <Text style={layout.filterHeading}>Try searching for</Text>
         <View style={styles.row}>
-          {(['receipts', 'screenshots with text', 'whiteboard', 'last month'] as const).map((hint) => (
-            <Chip key={hint} label={hint} run={() => {
-              setQuery(hint);
-              lastSubmitted.current = hint;
-              setTypedSearchDone(true);
-              setRequest(parseRecallQuery(hint));
-            }} />
+          {(['receipts', 'beach', 'wedding', 'last month'] as const).map((hint) => (
+            <Chip key={hint} label={hint} run={() => tryQuery(hint)} />
           ))}
         </View>
       </View>}
@@ -180,13 +211,21 @@ export function RecallScreen({ revision, open, active, indexed, scan, search, st
             {recallDateLabels.map((label) => <Chip key={label} label={label} selected={draft.date?.label === label}
               run={() => setDraft({ ...draft, date: recallDateRange(label) })} />)}
           </View>
+          <Text style={layout.filterHeading}>Place</Text>
           <TextInput value={draft.place ?? ''} onChangeText={(place) => setDraft({ ...draft, place })}
             placeholder="Saved place name" placeholderTextColor={color.muted} accessibilityLabel="Saved place name"
-            maxLength={64} returnKeyType="done" style={layout.input} />
+            maxLength={80} returnKeyType="done" style={layout.input} />
+          {!!places.length && <View style={styles.row}>
+            {places.filter((name) => !draft.place || name.toLowerCase().includes(draft.place.trim().toLowerCase())).slice(0, 6)
+              .map((name) => <Chip key={name} label={name} selected={draft.place === name}
+                run={() => setDraft({ ...draft, place: draft.place === name ? null : name })} />)}
+          </View>}
+          <ActionLink label="Browse GPS locations on Photo Map" run={() => { setDraft(null); openMap(); }} />
           <View style={styles.row}><Chip label="Only photos with text" selected={draft.textOnly}
             run={() => setDraft({ ...draft, textOnly: !draft.textOnly })} /></View>
         </View>
       </ActionSheet>}
+      {active && reference && <ReferenceSearchSheet key={reference} uri={reference} close={() => setReference(null)} open={open} search={tryQuery} />}
       {index && (index.running || index.pending > 0) && <Text style={styles.body} accessibilityLiveRegion="polite">
         {index.running ? 'Updating your photo index. Available matches appear below.' : 'Some photos are still waiting to be indexed.'}
       </Text>}
@@ -241,6 +280,7 @@ const layout = StyleSheet.create({
   searchIcon: { backgroundColor: 'transparent' },
   filters: { gap: 12, padding: 12, borderColor: color.rule, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12 },
   filterHeading: { color: color.ink, fontSize: 15, fontWeight: '600' },
+  searchActions: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 20 },
   suggestions: { gap: 8 },
   result: { gap: 4, paddingBottom: 12 },
   evidence: { color: color.ink, fontSize: 14, lineHeight: 19 },
