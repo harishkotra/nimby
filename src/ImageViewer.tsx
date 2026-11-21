@@ -6,7 +6,7 @@ import { color, Icon, IconButton, styles, Thumbnail, useReducedMotion } from './
 export function ImageViewer({ uri, label, album, subtitle, close, children, footer, summary = 'Photo details' }: {
   uri: string | null; label: string; album?: string | null; subtitle?: string | null;
   close: () => void; children?: ReactNode; summary?: string;
-  footer?: (openDetails: () => void) => ReactNode;
+  footer?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const reduced = useReducedMotion();
@@ -45,7 +45,7 @@ export function ImageViewer({ uri, label, album, subtitle, close, children, foot
         </Pressable>
         {expanded && <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled bounces={false}
           contentContainerStyle={layout.contents}>{children}</ScrollView>}
-        {footer && <View style={layout.footer}>{footer(() => changeExpanded(true))}</View>}
+        {footer && <View style={layout.footer}>{footer}</View>}
       </View>
     </SafeAreaView>
   </Modal>;

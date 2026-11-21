@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { useArchiveConfirmation } from './ArchiveScreen';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActionMenu, ActionSheet } from './ActionSheet';
 import { ImageViewer } from './ImageViewer';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
 import { native, type Decision, type Feed, type Result, type ReviewCategory } from './gallery';
-import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, Icon, percent, styles, Thumbnail, titleCase, useReducedMotion } from './ui';
+import { Body, Button, Chip, IconButton, color, EmptyState, ErrorText, Heading, Icon, percent, styles, Thumbnail, titleCase, useReducedMotion } from './ui';
 
 type ReviewMode = Feed | 'scan';
 
@@ -13,9 +14,9 @@ const titles: Record<ReviewMode, string> = {
   suggestions: 'Worth revisiting', kept: 'Kept photos', dismissed: 'Dismissed photos', scan: 'Scan results',
 };
 
-export function Revisit({ revision, open, openCategory, openMode, scan, browsing, toggleBrowse, search }: {
+export function Revisit({ revision, open, openCategory, openMode, browsing, toggleBrowse }: {
   revision: number; open: (item: Result) => void; openCategory: (category: string) => void;
-  openMode: (mode: Feed) => void; scan: () => void; browsing: boolean; toggleBrowse: () => void; search: () => void;
+  openMode: (mode: Feed) => void; browsing: boolean; toggleBrowse: () => void;
 }) {
   const [picks, setPicks] = useState<Result[] | null>(null);
   const [categories, setCategories] = useState<ReviewCategory[]>([]);
@@ -51,9 +52,7 @@ export function Revisit({ revision, open, openCategory, openMode, scan, browsing
   const lead = picks?.[0];
   return <ScrollView contentContainerStyle={styles.content}>
     <View style={layout.intro}>
-      <View style={styles.between}><Heading large>Worth revisiting</Heading>
-        <Button label="Search" icon="search" subtle run={search} />
-      </View>
+      <Heading large>Worth revisiting</Heading>
       <Body>A few saved photos to come back to</Body>
     </View>
     {error ? <View style={layout.intro}><ErrorText>Could not load picks.</ErrorText>
@@ -84,7 +83,6 @@ export function Revisit({ revision, open, openCategory, openMode, scan, browsing
         <Heading>No picks in this set</Heading>
         <View style={styles.row}>
           <Button label={seen.length ? 'Start over' : 'Check for picks'} subtle run={() => refreshPicks([])} />
-          <Button label="Scan photos" subtle run={scan} />
         </View>
       </View>}
     <View style={layout.library}>
@@ -138,7 +136,7 @@ function ScanCategories({ revision, scanId, openCategory }: {
       <ErrorText>Could not load categories.</ErrorText>
       <Button label="Try again" subtle run={() => setRetry((value) => value + 1)} />
     </View> : categories == null ? <ActivityIndicator color={color.blue} /> :
-      categories.length === 0 ? <EmptyState icon="gallery"
+      categories.length === 0 ? <EmptyState icon="gallery" mascot="resting"
         title="No results to show" text="This scan has no available analyzed photos to review."  /> :
       <View style={layout.sheets}>
         {categories.map(({ name, count: groupCount, previews }) => <Pressable key={name}
@@ -252,7 +250,7 @@ function ReviewPhotos({ revision, open, mode, category, scanId, changed, openCat
         </View>}
         {!!error && <ErrorText>{error}</ErrorText>}
       </View>}
-      ListEmptyComponent={!loading && !error ? <EmptyState icon="gallery" title="No photos here"
+      ListEmptyComponent={!loading && !error ? <EmptyState icon="gallery" mascot={mode === 'kept' ? 'happy' : 'discovering'} title="No photos here"
         text={mode === 'kept' ? 'Keep a photo to find it here later.' : 'Photos in this view may have been archived or become unavailable.'} /> : undefined}
       ListFooterComponent={loading ? <ActivityIndicator color={color.blue} /> :
         error ? <Button label="Try again" subtle run={() => load(results.length)} /> : undefined}
@@ -276,11 +274,11 @@ export function PhotoDetail({ item, close, changed, open }: {
   const confirmArchive = useArchiveConfirmation();
   const [photo, setPhoto] = useState(item);
   const [similar, setSimilar] = useState<Result[] | null>(null);
+  const [showSimilar, setShowSimilar] = useState(false);
   const [loadingSimilar, setLoadingSimilar] = useState(false);
   const [organizing, setOrganizing] = useState(false);
   const [collections, setCollections] = useState<string[]>([]);
   const [name, setName] = useState(item.collection ?? '');
-  const [moreActions, setMoreActions] = useState(false);
   const [modelDetails, setModelDetails] = useState(false);
   const [placeName, setPlaceName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -317,6 +315,8 @@ export function PhotoDetail({ item, close, changed, open }: {
   }
 
   function organize() {
+    setError('');
+    setName(photo.collection ?? '');
     setOrganizing(true);
     native?.groups(true).then(setCollections).catch(() => setCollections([]));
   }
@@ -347,96 +347,95 @@ export function PhotoDetail({ item, close, changed, open }: {
   const finding = reference === 'Screenshots' && photoType === 'Screenshot' ? photoType : reference ?? photoType;
   const kept = photo.decision === 'kept';
 
-  const detailRow = (label: string, run: () => void, disabled = false) =>
-    <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={run}
-      style={({ pressed }) => [layout.detailRow, (pressed || disabled) && styles.faded]}>
-      <Text style={layout.sheetName}>{label}</Text>
-      <Icon name="chevron" size={18} tint={color.muted} />
-    </Pressable>;
-
-  return <ImageViewer uri={photo.uri} label={photo.name}
-    album={finding ?? photo.album}
-    subtitle={finding && photo.album ? photo.album : undefined}
-    close={close}
-    summary={finding ? `Eye · ${finding}` : 'Photo notes'}
-    footer={(openDetails) => <View style={styles.row}>
-      {kept ? <View accessible accessibilityLabel="Kept" style={layout.kept}>
-        <Icon name="check" size={18} tint={color.blue} /><Body>Kept</Body>
-      </View> : <Button label={photo.decision === 'dismissed' ? 'Undo dismissal' : 'Keep'} icon="bookmark"
-        disabled={busy} style={layout.fill} run={() => void decide(photo.decision === 'new' ? 'kept' : 'new')} />}
-      <Button label="Why / actions" subtle run={() => { setMoreActions(true); openDetails(); }} />
-    </View>}>
-    <View style={layout.notes}>
-      <Text style={layout.noteLabel}>Identified by Eye</Text>
-      <Heading>{finding ?? 'No clear match'}</Heading>
-      {photoType && finding !== photoType && <Body>{photoType}</Body>}
-      {photo.decision === 'kept' && photo.collection && <Body>In {photo.collection}</Body>}
-    </View>
-    {!!error && <ErrorText>{error}</ErrorText>}
-    {moreActions && <View style={layout.details}>
-      <Heading>Photo actions</Heading>
-      {detailRow('Organize into a collection', organize, busy)}
-      {detailRow('Edit place name', () => void openPlaceEditor(), busy)}
-      {kept && detailRow('Undo keep', () => void decide('new'), busy)}
-      {photo.decision !== 'dismissed' && detailRow('Dismiss suggestion', () => void decide('dismissed'), busy)}
-      {photo.uri && detailRow('Archive photo', () => {
-        if (photo.uri) confirmArchive([photo.uri], () => { changed(); close(); });
-      }, busy)}
-      {photo.uri && detailRow('Open in Photos', () => {
-        setError('');
-        native?.openOriginal(photo.id, photo.sourceKey ?? null).catch((cause: unknown) => {
-          setError(cause instanceof Error ? cause.message : 'This photo could not be opened.');
-        });
-      })}
-      {similar == null && detailRow(loadingSimilar ? 'Finding similar photos…' : 'Find similar photos',
-        () => void findSimilar(), loadingSimilar)}
-    </View>}
-    {placeName != null && <View style={styles.column}>
-      <Heading>Place name</Heading>
-      <Body>Use this name to find the photo in Recall. Clear the field to remove it.</Body>
-      <TextInput accessibilityLabel="Place name" placeholder="Place name" placeholderTextColor={color.muted}
-        value={placeName} onChangeText={setPlaceName} maxLength={80} style={layout.input} />
-      <View style={styles.row}>
-        <Button label="Save place" run={() => void savePlace()} disabled={busy} />
-        <Button label="Cancel" subtle run={() => setPlaceName(null)} disabled={busy} />
+  return <>
+    <ImageViewer uri={photo.uri} label={photo.name}
+      album={finding ?? photo.album}
+      subtitle={finding && photo.album ? photo.album : undefined}
+      close={close}
+      summary="Eye analysis"
+      footer={<View style={layout.footer}>
+        <View style={styles.row}>
+          {kept ? <View accessible accessibilityLabel="Kept" style={layout.kept}>
+            <Icon name="check" size={18} tint={color.blue} /><Body>Kept</Body>
+          </View> : <Button label={photo.decision === 'dismissed' ? 'Undo dismissal' : 'Keep'} icon="bookmark"
+            disabled={busy} style={layout.fill} run={() => void decide(photo.decision === 'new' ? 'kept' : 'new')} />}
+          <ActionMenu title="Photo actions" label="More photo actions" overflow disabled={busy} options={[
+            { label: 'Find similar photos', run: () => {
+              setError('');
+              setShowSimilar(true);
+              if (similar == null) void findSimilar();
+            } },
+            { label: 'Organize into a collection', run: organize },
+            { label: 'Edit place name', run: () => void openPlaceEditor() },
+            ...(kept ? [{ label: 'Undo keep', run: () => void decide('new') }] : []),
+            ...(photo.decision !== 'dismissed' ? [{ label: 'Dismiss suggestion', run: () => void decide('dismissed') }] : []),
+            ...(photo.uri ? [
+              { label: 'Open in Photos', run: () => {
+                setError('');
+                native?.openOriginal(photo.id, photo.sourceKey ?? null).catch((cause: unknown) => {
+                  setError(cause instanceof Error ? cause.message : 'This photo could not be opened.');
+                });
+              } },
+              { label: 'Archive photo', run: () => {
+                if (photo.uri) confirmArchive([photo.uri], () => { changed(); close(); });
+              } },
+            ] : []),
+          ]} />
+        </View>
+        {!!error && placeName == null && !organizing && !showSimilar && <ErrorText>{error}</ErrorText>}
+      </View>}>
+      <View style={layout.notes}>
+        <Text style={layout.noteLabel}>Identified by Eye</Text>
+        <Heading>{finding ?? 'No clear match'}</Heading>
+        {photoType && finding !== photoType && <Body>{photoType}</Body>}
+        {photo.decision === 'kept' && photo.collection && <Body>In {photo.collection}</Body>}
       </View>
-    </View>}
-    {organizing && <View style={styles.column}>
-      <Heading>Choose a collection</Heading>
-      {collections.length > 0 && <View style={styles.row}>
-        {collections.map((collection) => <Chip key={collection} label={collection} selected={name === collection} run={() => setName(collection)} />)}
+      {(photo.confidence != null || photo.tags.length > 0) && <View style={layout.details}>
+        <Pressable accessibilityRole="button" accessibilityState={{ expanded: modelDetails }} style={styles.textAction}
+          onPress={() => setModelDetails(!modelDetails)}>
+          <Text style={styles.link}>Model details</Text>
+          <Icon name={modelDetails ? 'up' : 'down'} size={18} tint={color.muted} />
+        </Pressable>
+        {modelDetails && <>
+          {photoType && photo.confidence != null && <Body>{photoType} · {percent(photo.confidence)} type confidence</Body>}
+          {photo.tags.map((tag) => <View key={tag.label} style={layout.scoreRow}>
+            <Text style={styles.body}>{titleCase(tag.label)}</Text>
+            <Text style={layout.sheetCount}>{percent(tag.confidence)}</Text>
+          </View>)}
+        </>}
       </View>}
-      <TextInput accessibilityLabel="Collection name" placeholder="Collection name" placeholderTextColor={color.muted}
-        value={name} onChangeText={setName} maxLength={60} style={layout.input} />
-      <View style={styles.row}>
-        <Button label="Save to collection" run={() => void decide('kept', name.trim())} disabled={busy || !name.trim()} />
-        <Button label="Cancel" subtle run={() => setOrganizing(false)} />
+    </ImageViewer>
+    {placeName != null && <ActionSheet title="Place name" close={() => { if (!busy) { setPlaceName(null); setError(''); } }}
+      footer={<Button label="Save place" run={() => void savePlace()} disabled={busy} />}>
+      <View style={styles.column}>
+        <Body>Use this name to find the photo in Search. Clear the field to remove it.</Body>
+        <TextInput accessibilityLabel="Place name" placeholder="Place name" placeholderTextColor={color.muted}
+          value={placeName} onChangeText={setPlaceName} maxLength={80} style={layout.input} />
+        {!!error && <ErrorText>{error}</ErrorText>}
       </View>
-    </View>}
-    {similar !== null && <View style={styles.column}>
-      <Heading>Similar photos</Heading>
-      {similar.length ? <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={layout.filters}>
-        {similar.map((result) => <View style={layout.similarTile} key={result.id}>
-          <PhotoTile uri={result.uri} label={result.name} press={() => open(result)} />
-          {result.similarity !== undefined && <Body>{percent(result.similarity)} similar</Body>}
-        </View>)}
-      </ScrollView> : <Body>No visual matches among your analyzed photos</Body>}
-    </View>}
-    {(photo.confidence != null || photo.tags.length > 0) && <View style={layout.details}>
-      <Pressable accessibilityRole="button" accessibilityState={{ expanded: modelDetails }} style={styles.textAction}
-        onPress={() => setModelDetails(!modelDetails)}>
-        <Text style={styles.link}>Model details</Text>
-        <Icon name={modelDetails ? 'up' : 'down'} size={18} tint={color.muted} />
-      </Pressable>
-      {modelDetails && <>
-        {photoType && photo.confidence != null && <Body>{photoType} · {percent(photo.confidence)} type confidence</Body>}
-        {photo.tags.map((tag) => <View key={tag.label} style={layout.scoreRow}>
-          <Text style={styles.body}>{titleCase(tag.label)}</Text>
-          <Text style={layout.sheetCount}>{percent(tag.confidence)}</Text>
-        </View>)}
-      </>}
-    </View>}
-  </ImageViewer>;
+    </ActionSheet>}
+    {organizing && <ActionSheet title="Choose a collection" close={() => { if (!busy) { setOrganizing(false); setError(''); } }}
+      footer={<Button label="Save to collection" run={() => void decide('kept', name.trim())} disabled={busy || !name.trim()} />}>
+      <View style={styles.column}>
+        {collections.length > 0 && <View style={styles.row}>
+          {collections.map((collection) => <Chip key={collection} label={collection} selected={name === collection} run={() => setName(collection)} />)}
+        </View>}
+        <TextInput accessibilityLabel="Collection name" placeholder="Collection name" placeholderTextColor={color.muted}
+          value={name} onChangeText={setName} maxLength={60} style={layout.input} />
+        {!!error && <ErrorText>{error}</ErrorText>}
+      </View>
+    </ActionSheet>}
+    {showSimilar && <ActionSheet title="Similar photos" close={() => { setShowSimilar(false); setError(''); }}>
+      {loadingSimilar ? <ActivityIndicator accessibilityLabel="Finding similar photos" color={color.blue} /> : error
+        ? <View style={styles.column}><ErrorText>{error}</ErrorText><Button label="Try again" subtle run={() => void findSimilar()} /></View>
+        : similar?.length ? <ScrollView horizontal contentContainerStyle={layout.filters}>
+          {similar.map((result) => <View style={layout.similarTile} key={result.id}>
+            <PhotoTile uri={result.uri} label={result.name} press={() => { setShowSimilar(false); open(result); }} />
+            {result.similarity !== undefined && <Body>{percent(result.similarity)} similar</Body>}
+          </View>)}
+        </ScrollView> : <Body>No visual matches among your analyzed photos.</Body>}
+    </ActionSheet>}
+  </>;
 }
 
 const layout = StyleSheet.create({
@@ -464,10 +463,10 @@ const layout = StyleSheet.create({
   filters: { gap: 8 },
   similarTile: { width: 108, gap: 4 },
   notes: { gap: 4, paddingBottom: 12 },
+  footer: { gap: 8 },
   kept: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 48, gap: 8 },
   noteLabel: { color: color.muted, fontSize: 14 },
   details: { gap: 4, paddingTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
-  detailRow: { minHeight: 48, flexDirection: 'row', gap: 8, alignItems: 'center' },
   scoreRow: { minHeight: 28, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 },
   input: { color: color.ink, borderWidth: 1, borderColor: color.rule, borderRadius: 13,
     backgroundColor: color.paper, paddingHorizontal: 12, minHeight: 48, fontSize: 16 },

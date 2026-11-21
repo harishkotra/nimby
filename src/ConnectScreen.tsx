@@ -1,3 +1,4 @@
+import { ActionMenu } from './ActionSheet';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, BackHandler, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Result } from './gallery';
@@ -6,7 +7,7 @@ import {
   type ConnectCandidate, type ConnectCorrections, type ConnectEvent, type ConnectPage,
 } from './connectTimeline';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
-import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, styles } from './ui';
+import { ActionLink, Body, Button, color, EmptyState, ErrorText, Heading, styles } from './ui';
 
 export type ConnectScreenProps = {
   revision: number;
@@ -133,7 +134,7 @@ export function ConnectScreen({
       keyboardShouldPersistTaps="handled"
       ListHeaderComponent={<View style={layout.header}>
         <View style={styles.row}>
-          <Button label="All moments" icon="back" subtle disabled={saving} run={() => showEvent(null)} />
+          <ActionLink label="All moments" disabled={saving} run={() => showEvent(null)} />
         </View>
         <Heading large>{active.title}</Heading>
         <Body>{spanLabel(active)} · {active.items.length.toLocaleString()} {active.items.length === 1 ? 'photo' : 'photos'}</Body>
@@ -145,23 +146,25 @@ export function ConnectScreen({
             placeholderTextColor={color.muted} accessibilityLabel="Moment name" style={layout.input} />
           <View style={styles.row}>
             <Button label="Save name" disabled={saving || !rename.trim()} run={() => void save(renameEvent(corrections, active, rename))} />
-            <Button label="Cancel" subtle disabled={saving} run={() => setRename(null)} />
+            <ActionLink label="Cancel" disabled={saving} run={() => setRename(null)} />
           </View>
         </> : split !== null ? <>
           <Body>Pick the photos for a new moment.</Body>
           <View style={styles.row}>
             <Button label="Save split" disabled={saving || !split.size || split.size >= active.items.length}
               run={() => void save(splitEvent(corrections, active, split))} />
-            <Button label="Cancel" subtle disabled={saving} run={() => setSplit(null)} />
+            <ActionLink label="Cancel" disabled={saving} run={() => setSplit(null)} />
           </View>
         </> : <View style={styles.row}>
           {!active.confirmed && <Button label="Confirm" disabled={saving} run={() => void save(renameEvent(corrections, active, active.title))} />}
-          <Button label="Rename" subtle disabled={saving} run={() => setRename(active.title)} />
-          {active.items.length > 1 && <Button label="Split" subtle disabled={saving} run={() => setSplit(new Set())} />}
-          {events.length > 1 && <Button label="Merge" subtle disabled={saving} run={() => {
-            setMergeFrom(active.id);
-            setActiveId(null);
-          }} />}
+          <ActionMenu title="Edit this moment" label="More moment actions" overflow disabled={saving} options={[
+            { label: 'Rename moment', run: () => setRename(active.title) },
+            ...(active.items.length > 1 ? [{ label: 'Split moment', run: () => setSplit(new Set<string>()) }] : []),
+            ...(events.length > 1 ? [{ label: 'Merge with another moment', run: () => {
+              setMergeFrom(active.id);
+              setActiveId(null);
+            } }] : []),
+          ]} />
         </View>}
       </View>}
       renderTile={({ photo }) => <PhotoTile uri={photo.uri} label={photo.name}
@@ -176,12 +179,12 @@ export function ConnectScreen({
     contentContainerStyle={styles.content}
     showsVerticalScrollIndicator={false}
     ListHeaderComponent={<View style={layout.header}>
-      <Heading large>Connect</Heading>
+      <Heading large>Timeline</Heading>
       <Body>Moments from photos taken around the same time or place.</Body>
       {merging ? <View style={layout.band}>
         <Body>Choose a moment to merge with “{merging.title}”.</Body>
         <View style={styles.row}>
-          <Button label="Cancel merge" subtle disabled={saving} run={() => {
+          <ActionLink label="Cancel merge" disabled={saving} run={() => {
             setMergeFrom(null);
             setSaveError(false);
           }} />
@@ -189,9 +192,8 @@ export function ConnectScreen({
       </View> : <>
         <Body>{dateLabel(range.start)} – {dateLabel(range.end - 1)}</Body>
         <View style={styles.row}>
-          <Chip label="Recent 90 days" selected={period === 0} run={() => setPeriod(0)} />
-          <Button label="Earlier" subtle run={() => setPeriod(period + 1)} />
-          {period > 0 && <Button label="Later" subtle run={() => setPeriod(period - 1)} />}
+          <ActionLink label="Earlier" run={() => setPeriod(period + 1)} />
+          {period > 0 && <ActionLink label="Later" run={() => setPeriod(period - 1)} />}
         </View>
       </>}
       {snapshot?.truncated && <Body>Showing the most recent indexed photos in this period.</Body>}
@@ -200,7 +202,7 @@ export function ConnectScreen({
         <ActivityIndicator accessibilityLabel="Building timeline" color={color.blue} />}
       {saveError && <ErrorText>Could not save this change. Try again.</ErrorText>}
     </View>}
-    ListEmptyComponent={snapshot && !loadError ? <EmptyState icon="clock" title="No moments in this period"
+    ListEmptyComponent={snapshot && !loadError ? <EmptyState icon="clock" mascot="resting" title="No moments in this period"
       text="Scan photos with capture dates or choose a different period." /> : undefined}
     renderItem={({ item }) => <View style={layout.moment}>
       <View style={layout.rule}><View style={layout.dot} /></View>
@@ -214,11 +216,11 @@ export function ConnectScreen({
           </View>)}
         </View>
         <View style={styles.row}>
-          {merging ? <Button label={item.id === merging.id ? 'Selected moment' : 'Merge with this moment'}
-            disabled={saving || item.id === merging.id} subtle
+          {merging ? <ActionLink label={item.id === merging.id ? 'Selected moment' : 'Merge with this moment'}
+            disabled={saving || item.id === merging.id}
             run={() => void save(mergeEvents(corrections, merging, item))} /> :
-            <Button label={`Open ${item.items.length.toLocaleString()} ${item.items.length === 1 ? 'photo' : 'photos'}`}
-              subtle run={() => showEvent(item.id)} />}
+            <ActionLink label={`Open ${item.items.length.toLocaleString()} ${item.items.length === 1 ? 'photo' : 'photos'}`}
+              run={() => showEvent(item.id)} />}
         </View>
       </View>
     </View>}

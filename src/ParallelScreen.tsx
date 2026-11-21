@@ -1,3 +1,4 @@
+import { ActionMenu } from './ActionSheet';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import type { Result } from './gallery';
@@ -7,7 +8,7 @@ import {
   parallelPreferences, type ParallelCandidatePage, type ParallelChoice,
   type ParallelConstraints,
 } from './parallelPlans';
-import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, Icon, styles } from './ui';
+import { ActionLink, Body, Button, Segments, color, EmptyState, ErrorText, Heading, Icon, styles } from './ui';
 
 export type { ParallelChoice } from './parallelPlans';
 
@@ -87,33 +88,28 @@ export function ParallelScreen({ revision, open, loadCandidates, saveChoice, pre
         <Heading large>Compare next steps</Heading>
         <Body>Ideas from the photos you selected. Time estimates are approximate.</Body>
         <View style={styles.row}>
-          <Button label="Change photos" subtle disabled={saving !== null} run={() => setComparing(false)} />
+          <ActionLink label="Change photos" disabled={saving !== null} run={() => setComparing(false)} />
         </View>
       </View>
 
       <View style={layout.controls}>
         <Text style={layout.label}>Time available</Text>
-        <View style={styles.row}>
-          {parallelBudgets.map((minutes) => <Chip key={minutes} label={`${minutes} min`}
-            selected={constraints.minutes === minutes} run={() => {
-              if (!writing.current) {
-                setConstraints({ ...constraints, minutes });
-                setExpanded(null);
-                setSaved(null);
-              }
-            }} />)}
-        </View>
-        <Text style={layout.label}>Preferred approach</Text>
-        <View style={styles.row}>
-          {parallelPreferences.map((preference) => <Chip key={preference} label={preference}
-            selected={constraints.preference === preference} run={() => {
-              if (!writing.current) {
-                setConstraints({ ...constraints, preference });
-                setExpanded(null);
-                setSaved(null);
-              }
-            }} />)}
-        </View>
+        <Segments options={parallelBudgets.map((minutes) => ({ value: `${minutes}`, label: `${minutes} min` }))}
+          value={`${constraints.minutes}`} select={(value) => {
+            const minutes = parallelBudgets.find((item) => `${item}` === value);
+            if (!minutes || writing.current) return;
+            setConstraints({ ...constraints, minutes });
+            setExpanded(null);
+            setSaved(null);
+          }} />
+        <ActionMenu title="Preferred approach" label={constraints.preference} disabled={saving !== null}
+          options={parallelPreferences.map((preference) => ({
+            label: preference, selected: preference === constraints.preference, run: () => {
+              setConstraints({ ...constraints, preference });
+              setExpanded(null);
+              setSaved(null);
+            },
+          }))} />
       </View>
 
       {scope === null
@@ -123,7 +119,7 @@ export function ParallelScreen({ revision, open, loadCandidates, saveChoice, pre
           : <ActivityIndicator accessibilityLabel="Refreshing photos" color={color.blue} />
         : plans.length === 0
           ? <EmptyState icon="image" title="Choose another photo" text="The selected photos are no longer available."
-            action={<Button label="Change photos" subtle run={() => setComparing(false)} />} />
+            action={<ActionLink label="Change photos" run={() => setComparing(false)} />} />
           : <View>
             {plans.map((plan) => {
               const visible = activePlan === plan.id;
@@ -169,16 +165,15 @@ export function ParallelScreen({ revision, open, loadCandidates, saveChoice, pre
       extraData={selected}
       keyExtractor={({ photo }) => photo.id}
       ListHeaderComponent={<View style={layout.intro}>
-        <Heading large>Parallel</Heading>
+        <Heading large>Plan from saved photos</Heading>
         <Body>Choose photos you want to do something with.</Body>
-        <View style={styles.row}>
-          {scopes.map((range) => <Chip key={range} label={`Last ${range} days`} selected={days === range} run={() => {
-            if (days !== range) {
-              setDays(range);
-              setSelected([]);
-            }
-          }} />)}
-        </View>
+        <ActionMenu title="Photo date range" label={`Last ${days} days`} options={scopes.map((range) => ({
+          label: `Last ${range} days`, selected: days === range, run: () => {
+            if (days === range) return;
+            setDays(range);
+            setSelected([]);
+          },
+        }))} />
         {scope?.truncated && <Body>Showing part of this range. Choose a shorter range to narrow the list.</Body>}
         {selected.length === MAX_PARALLEL_PHOTOS && <Body>Deselect a photo to add another.</Body>}
       </View>}
@@ -193,7 +188,7 @@ export function ParallelScreen({ revision, open, loadCandidates, saveChoice, pre
     />
     {scope !== null && scope.items.length > 0 && <View style={layout.footer}>
       <Text accessibilityLiveRegion="polite" style={layout.selection}>{selected.length} of {MAX_PARALLEL_PHOTOS} selected</Text>
-      <Button label="Compare next steps" disabled={chosen.length === 0} run={() => {
+      <Button label="Compare" disabled={chosen.length === 0} run={() => {
         setExpanded(null);
         setSaveError(false);
         setSaved(null);

@@ -1,3 +1,4 @@
+import { ActionMenu } from './ActionSheet';
 import { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import type { Result } from './gallery';
@@ -6,7 +7,7 @@ import {
   type ConfirmedPatternGroup, type PatternCandidate, type PatternFeedback, type PhotoPattern,
 } from './patterns';
 import { PhotoTile } from './PhotoGrid';
-import { Body, Button, color, EmptyState, ErrorText, Heading, styles } from './ui';
+import { ActionLink, Body, Button, color, EmptyState, ErrorText, Heading, styles } from './ui';
 
 type Props = {
   revision: number;
@@ -82,7 +83,7 @@ export function PatternsScreen({ revision, loadCandidates, open, loadFeedback, s
 
   return <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
     <View style={layout.header}>
-      <Heading large>Discover</Heading>
+      <Heading large>Recurring themes</Heading>
       <Body>Explore patterns that showed up on several different days over the last 90 days.</Body>
       {truncated && <Body>Suggestions use the most recent scanned photos in this range.</Body>}
     </View>
@@ -91,7 +92,7 @@ export function PatternsScreen({ revision, loadCandidates, open, loadFeedback, s
       <ErrorText>{error}</ErrorText>
       <Button label="Try again" subtle run={() => setRetry((value) => value + 1)} />
     </View>}
-    {!loading && !error && patterns.length === 0 && <EmptyState icon="image" title="No recurring patterns yet"
+    {!loading && !error && patterns.length === 0 && <EmptyState icon="image" mascot="discovering" title="No recurring patterns yet"
       text="Patterns need matching photos from at least three different days. Scan more photos or review hidden patterns." />}
     {!!feedbackError && <ErrorText>{feedbackError}</ErrorText>}
     {!loading && !error && patterns.map((pattern) => <View key={pattern.id} style={layout.card}>
@@ -114,20 +115,22 @@ export function PatternsScreen({ revision, loadCandidates, open, loadFeedback, s
           <Button label="Save correction" disabled={saving || !editing.title.trim()} run={() => {
             void mark(pattern, 'corrected', editing.title.trim()).then((saved) => { if (saved) setEditing(null); });
           }} />
-          <Button label="Cancel" subtle run={() => setEditing(null)} />
+          <ActionLink label="Cancel" run={() => setEditing(null)} />
         </View>
       </View> : <View style={styles.row}>
         {!pattern.feedback && <Button label="Confirm" disabled={saving} run={() => void mark(pattern, 'confirmed')} />}
-        <Button label="Correct" subtle disabled={saving} run={() => setEditing({ id: pattern.id, title: pattern.title })} />
-        <Button label="Hide" subtle disabled={saving} run={() => void mark(pattern, 'hidden')} />
+        <ActionMenu title="Pattern actions" label="More pattern actions" overflow disabled={saving} options={[
+          { label: 'Correct pattern', run: () => setEditing({ id: pattern.id, title: pattern.title }) },
+          { label: 'Hide pattern', run: () => void mark(pattern, 'hidden') },
+        ]} />
       </View>}
     </View>)}
     {!loading && !error && hidden.length > 0 && <View style={styles.column}>
-      <Button label={hiddenVisible ? 'Close hidden patterns' : `Hidden patterns (${hidden.length})`} subtle
+      <ActionLink label={hiddenVisible ? 'Close hidden patterns' : `Hidden patterns (${hidden.length})`}
         run={() => setHiddenVisible(!hiddenVisible)} />
       {hiddenVisible && hidden.map((item) => <View key={item.id} style={styles.between}>
         <Body>{item.label}</Body>
-        <Button label="Restore" subtle disabled={saving}
+        <ActionLink label="Restore" disabled={saving}
           run={() => void persist(feedback.filter((record) => record.id !== item.id))} />
       </View>)}
     </View>}

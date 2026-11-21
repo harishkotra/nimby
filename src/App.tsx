@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { AppState, BackHandler, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { AppState, BackHandler, Keyboard, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { DialogProvider, useDialog } from './Dialogs';
+import { BottomTabs } from './BottomTabs';
 import { Discover, PhotoDetail, Revisit } from './Discover';
 import { HomeDashboard, InsightsScreen } from './Dashboard';
 import { DuplicatesScreen } from './DuplicatesScreen';
@@ -10,7 +11,6 @@ import { ArchiveScreen } from './ArchiveScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { RecallScreen } from './RecallScreen';
 import { PhotoMapScreen } from './PhotoMapScreen';
-import { VoiceSearch } from './VoiceSearch';
 import { ConnectScreen } from './ConnectScreen';
 import { parseCorrections } from './connectTimeline';
 import { PatternsScreen } from './PatternsScreen';
@@ -20,14 +20,15 @@ import { appendChoice, photoFeedbackScores, preferredActions, readEvolveState } 
 import { applyRecallFeedback } from './recallFeedback';
 import type { RecallSearch } from './recallQuery';
 import { native, openSettings, requestGalleryAccess, scanActive, type Access, type Album, type Feed, type Overview, type Result, type Scan } from './gallery';
+import { NimbyMascot, mascotForScan } from './NimbyMascot';
 import { Body, Button, color, ErrorText, Heading, Icon, IconButton, type IconName, styles } from './ui';
 
 type Screen = 'Home' | 'Revisit' | 'Gallery' | 'Discover' | 'Analysis' | 'Settings' | 'Archive' | 'Insights' | 'Duplicates'
   | 'Recall' | 'PhotoMap' | 'Connect' | 'Patterns' | 'Parallel' | 'Evolve';
 const tabs = [
-  { name: 'Home', icon: 'home' }, { name: 'Revisit', icon: 'bookmark' },
-  { name: 'Insights', icon: 'insights' }, { name: 'Archive', icon: 'archive' },
-] as const satisfies readonly { name: Screen; icon: IconName }[];
+  { name: 'Home', icon: 'home', label: 'Home' }, { name: 'Recall', icon: 'search', label: 'Search' },
+  { name: 'Insights', icon: 'insights', label: 'Insights' }, { name: 'Archive', icon: 'archive', label: 'Archive' },
+] as const satisfies readonly { name: Screen; icon: IconName; label: string }[];
 
 const loadCandidates = (start: number, end: number) => native!.personalCandidates(start, end);
 const loadCorrections = () => native!.readPersonal('connect');
@@ -63,6 +64,7 @@ export default function App() {
 function Nimby() {
   const show = useDialog();
   const [screen, setScreen] = useState<Screen>('Home');
+  const [searchVisited, setSearchVisited] = useState(false);
   const [access, setAccess] = useState<Access>(() => native!.access());
   const [albums, setAlbums] = useState<Album[]>([]);
   const [album, setAlbum] = useState<Album | 'recent' | null>(null);
@@ -72,6 +74,7 @@ function Nimby() {
   const [revision, setRevision] = useState(0);
   const [preferred, setPreferred] = useState<string[]>([]);
   const [recent, setRecent] = useState<Result[]>([]);
+  const [discovery, setDiscovery] = useState<Result | null>(null);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewError, setOverviewError] = useState(false);
   const [feed, setFeed] = useState<Feed | 'scan'>('suggestions');
@@ -167,17 +170,21 @@ function Nimby() {
     }).catch(() => {
       if (live) setRecentError(true);
     });
+    native!.revisitPicks([]).then((picks) => {
+      if (live) setDiscovery(picks.find((item) => item.uri) ?? null);
+    }).catch(() => { if (live) setDiscovery(null); });
     return () => { live = false; };
   }, [revision, screen]);
 
+  const needsOverview = screen === 'Home' || screen === 'Insights' || screen === 'Recall';
   useEffect(() => {
-    if (screen !== 'Home' && screen !== 'Insights') return;
+    if (!needsOverview) return;
     let live = true;
     setOverviewError(false);
     native!.overview().then((value) => { if (live) setOverview(value); })
       .catch(() => { if (live) setOverviewError(true); });
     return () => { live = false; };
-  }, [screen, revision]);
+  }, [needsOverview, revision]);
 
   function start(albumsToScan: string[], uris: string[]) {
     if (scanActive(native!.scanStatus())) {
@@ -256,6 +263,9 @@ function Nimby() {
   }
 
   function navigate(destination: Screen) {
+    if (destination === screen) return;
+    if (destination === 'Recall') setSearchVisited(true);
+    if (screen === 'Recall') Keyboard.dismiss();
     if (tabs.some((tab) => tab.name === screen)) backTo.current = screen;
     if (destination === 'Analysis' && screen !== 'Analysis') {
       analysisBack.current = screen === 'Discover' ? backTo.current : screen;
@@ -308,7 +318,6 @@ function Nimby() {
     patterns: () => navigate('Patterns'),
     parallel: () => navigate('Parallel'),
     evolve: () => navigate('Evolve'),
-    scan: () => void galleryAction('scan'),
   };
 
   const primary = tabs.some((tab) => tab.name === screen);
@@ -332,18 +341,22 @@ function Nimby() {
       </View>
     </View>}
     <View style={layout.main}>
+      {searchVisited && <View style={[StyleSheet.absoluteFill, screen !== 'Recall' && layout.hiddenScreen]}
+        pointerEvents={screen === 'Recall' ? 'auto' : 'none'} accessibilityElementsHidden={screen !== 'Recall'}
+        importantForAccessibility={screen === 'Recall' ? 'auto' : 'no-hide-descendants'}>
+        <RecallScreen revision={revision} open={setDetail} active={screen === 'Recall'} indexed={overview?.localAnalyzed ?? null}
+          scan={() => void galleryAction('scan')} search={searchWithFeedback}
+          status={native!.memoryStatus} startBackfill={native!.requestMemoryBackfill} />
+      </View>}
       {screen === 'Home' && <HomeDashboard {...links} data={overview} error={overviewError} busy={busy}
-        scan={() => void galleryAction('scan')} pick={() => void pick()} previews={recent} recentError={recentError}
+        scan={() => void galleryAction('scan')} pick={() => void pick()} previews={recent} discovery={discovery} recentError={recentError}
         openPhoto={setDetail} openScan={(id) => openReview('scan', null, id)} />}
       {screen === 'Gallery' && <GalleryScreen access={access} albums={albums} loading={loadingAlbums} error={galleryError}
         album={album} open={setAlbum} manage={() => void galleryAction('manage')} settings={showSettings}
         pick={() => void pick()} scan={start} revision={galleryRevision} />}
       {screen === 'Revisit' && <Revisit revision={revision} open={setDetail} openMode={openReview}
-        openCategory={(name) => openReview('suggestions', name)} scan={() => void galleryAction('scan')}
-        browsing={browseReferences} toggleBrowse={() => setBrowseReferences((value) => !value)} search={links.recall} />}
-      {screen === 'Recall' && <RecallScreen revision={revision} open={setDetail}
-        search={searchWithFeedback} status={native!.memoryStatus} startBackfill={native!.requestMemoryBackfill}
-        voice={(onTranscript, deferPrompt) => <VoiceSearch onTranscript={onTranscript} deferPrompt={deferPrompt} />} />}
+        openCategory={(name) => openReview('suggestions', name)}
+        browsing={browseReferences} toggleBrowse={() => setBrowseReferences((value) => !value)} />}
       {screen === 'PhotoMap' && <PhotoMapScreen revision={revision} open={setDetail} />}
       {screen === 'Connect' && <ConnectScreen revision={revision} open={setDetail} loadCandidates={loadCandidates}
         loadCorrections={loadCorrections} saveCorrections={saveCorrections} onCorrectionsChanged={changed} />}
@@ -368,20 +381,7 @@ function Nimby() {
       {screen === 'Archive' && <ArchiveScreen revision={revision} scanning={scanActive(scan)}
         changed={() => setRevision((value) => value + 1)} openDuplicates={() => navigate('Duplicates')} />}
     </View>
-    <View style={layout.nav} accessibilityRole="tablist">
-      {tabs.map(({ name, icon }) => {
-        const active = selectedTab === name;
-        return <Pressable key={name} accessibilityRole="tab" accessibilityLabel={name}
-          accessibilityState={{ selected: active }} onPress={() => navigate(name)}
-          style={({ pressed }) => [layout.navItem, pressed && styles.pressed]}>
-          <View style={[layout.navIndicator, active && layout.navIndicatorActive]} />
-          <View style={[layout.navIconWrap, active && layout.navIconActive]}>
-            <Icon name={icon} size={20} tint={active ? color.paper : color.muted} />
-          </View>
-          <Text style={[layout.navText, active && layout.navTextActive]}>{name}</Text>
-        </Pressable>;
-      })}
-    </View>
+    <BottomTabs tabs={tabs} selected={selectedTab} navigate={navigate} />
     {detail && <PhotoDetail key={detail.sourceKey ?? detail.id} item={detail} close={() => setDetail(null)} open={setDetail}
       changed={() => setRevision((value) => value + 1)} />}
   </>;
@@ -397,7 +397,12 @@ function AnalysisScreen({ scan, access, control, results, done }: {
     cancelled: 'Scan cancelled', blocked: 'Scan stopped',
   }[scan.phase];
   const progress = scan.total ? Math.min(100, Math.floor(scan.processed / scan.total * 100)) : 0;
+  const hasResults = scan.analyzed + scan.cached > 0;
+  const mood = mascotForScan(scan.phase, hasResults);
   return <ScrollView contentContainerStyle={styles.content}>
+    <View style={layout.mascotHero}>
+      <NimbyMascot state={mood} size={168} />
+    </View>
     <Heading large>{title}</Heading>
     {access === 'limited' && <Body>Gallery scans use the photos you shared with Nimby through Android.</Body>}
     {scan.phase === 'preparing' && <Body>Nimby is checking your selection and getting the on-device Eye model ready.</Body>}
@@ -432,6 +437,7 @@ function AnalysisScreen({ scan, access, control, results, done }: {
 const layout = StyleSheet.create({
   shell: { flex: 1, backgroundColor: color.paper },
   main: { flex: 1 },
+  hiddenScreen: { opacity: 0 },
   top: { minHeight: 48, paddingHorizontal: 16, alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
   brand: { minHeight: 48, justifyContent: 'center', paddingHorizontal: 4 },
   wordmark: { color: color.ink, fontWeight: '600', fontSize: 28, letterSpacing: -1 },
@@ -440,15 +446,7 @@ const layout = StyleSheet.create({
   headerButton: { backgroundColor: 'transparent' },
   scanShortcut: { minHeight: 48, minWidth: 48, borderRadius: 24, justifyContent: 'center', alignItems: 'center' },
   liveDot: { position: 'absolute', width: 7, height: 7, borderRadius: 4, backgroundColor: color.blue, top: 8, right: 10 },
-  nav: { flexDirection: 'row', paddingHorizontal: 8, backgroundColor: color.paper,
-    borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
-  navItem: { flex: 1, minHeight: 72, alignItems: 'center', paddingHorizontal: 2, paddingTop: 10, paddingBottom: 8, gap: 4 },
-  navIndicator: { position: 'absolute', top: 0, width: 20, height: 2, borderRadius: 1 },
-  navIndicatorActive: { backgroundColor: color.blue },
-  navIconWrap: { width: 36, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  navIconActive: { backgroundColor: color.blue },
-  navText: { color: color.muted, fontWeight: '500', fontSize: 12, textAlign: 'center' },
-  navTextActive: { color: color.blue, fontWeight: '700' },
+  mascotHero: { alignItems: 'center', paddingTop: 8, paddingBottom: 4, minHeight: 180, justifyContent: 'center' },
   progressCard: { backgroundColor: color.white, borderWidth: 1, borderColor: color.rule, borderRadius: 16, padding: 16, gap: 8 },
   progressNumber: { color: color.ink, fontVariant: ['tabular-nums'], fontSize: 34 },
   track: { height: 10, borderRadius: 20, backgroundColor: color.tint, overflow: 'hidden', marginVertical: 7 },

@@ -5,7 +5,7 @@ import { useDialog } from './Dialogs';
 import { ImageViewer } from './ImageViewer';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
 import { native, type ArchivedPhoto } from './gallery';
-import { Body, Button, Chip, color, EmptyState, ErrorText, formatBytes, Heading, Icon, IconButton, styles, Thumbnail, useReducedMotion } from './ui';
+import { ActionLink, Body, Button, color, EmptyState, ErrorText, formatBytes, Heading, Icon, IconButton, styles, Thumbnail, useReducedMotion } from './ui';
 
 export function useArchiveConfirmation() {
   const show = useDialog();
@@ -125,7 +125,7 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
       ListHeaderComponent={<View style={layout.header}>
         <View style={styles.between}>
           <Heading large>Archive</Heading>
-          {!!items.length && <Chip label={selecting ? 'Done' : 'Select'} selected={selecting} run={() => {
+          {!!items.length && <ActionLink label={selecting ? 'Done' : 'Select'} run={() => {
             setSelecting(!selecting);
             setSelected(new Set());
           }} />}
@@ -161,8 +161,8 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
     {!!selected.size && <View style={layout.bar}>
       <Text accessibilityLiveRegion="polite" style={layout.name}>{selected.size} selected</Text>
       <View style={styles.row}>
-        <Button label="Restore selected" subtle disabled={busy} run={() => void restore([...selected])} />
-        <Button label="Review selected" disabled={busy || selectedItems.some((item) => item.eligible > Date.now())}
+        <Button label="Restore selected" disabled={busy} run={() => void restore([...selected])} />
+        <ActionLink label="Review for deletion" disabled={busy || selectedItems.some((item) => item.eligible > Date.now())}
           run={() => openReview(selectedItems)} />
       </View>
     </View>}
@@ -174,7 +174,7 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
         : 'Eligible for deletion review.'}</Body>
       {!preview.uri && <Body>Original unavailable. You can still remove this archive entry by restoring it.</Body>}
       <Button label="Restore" disabled={busy} run={() => { setPreview(null); void restore([preview.id]); }} />
-      {!daysLeft(preview) && <Button label="Review for deletion" subtle disabled={busy} run={() => openReview([preview])} />}
+      {!daysLeft(preview) && <ActionLink label="Review for deletion" disabled={busy} run={() => openReview([preview])} />}
     </ImageViewer>}
     <Modal visible={review.length > 0} onRequestClose={() => { if (!busy) setReview([]); }} animationType={reduced ? 'none' : 'fade'} hardwareAccelerated statusBarTranslucent navigationBarTranslucent>
       <SafeAreaView style={layout.shell}>
@@ -191,8 +191,7 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
           </View>)}
           {review.some((item) => !item.canDelete) && <Body>An original is unavailable or can only be managed in its source app.</Body>}
           {scanning && <Body>Finish or cancel the active scan before requesting deletion.</Body>}
-          <Button label="Permanently delete originals" destructive disabled={busy || scanning || review.some((item) => !item.canDelete)} run={deleteConfirmed} />
-          <Button label="Back to archive" subtle disabled={busy} run={() => setReview([])} />
+          <ActionLink label="Permanently delete originals" danger disabled={busy || scanning || review.some((item) => !item.canDelete)} run={deleteConfirmed} />
         </ScrollView>
       </SafeAreaView>
     </Modal>

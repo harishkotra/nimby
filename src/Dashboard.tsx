@@ -1,10 +1,13 @@
+import { ActionMenu } from './ActionSheet';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type DimensionValue } from 'react-native';
 import type { Feed, Overview, Result } from './gallery';
+import { homeLeadAction } from './homeActions';
 import { PhotoTile } from './PhotoGrid';
+import { NimbyMascot } from './NimbyMascot';
 import {
-  Body, Button, color, ErrorText, formatBytes, Heading, Icon, type IconName, isLowCoverage,
-  percent, SectionTitle, styles,
+  ActionLink, Body, Button, color, ErrorText, formatBytes, Heading, Icon, type IconName,
+  percent, SectionTitle, styles, Thumbnail, titleCase,
 } from './ui';
 
 const count = (n: number | null | undefined) => n == null ? '—' : n.toLocaleString();
@@ -16,7 +19,6 @@ type Links = {
   gallery: () => void; duplicates: () => void; archive: () => void;
   discover: (mode: Feed, category?: string) => void; recall: () => void; photoMap: () => void;
   connect: () => void; patterns: () => void; parallel: () => void; evolve: () => void;
-  scan?: () => void;
 };
 
 function Action({ label, value, icon, run }: { label: string; value?: string; icon: IconName; run: () => void }) {
@@ -55,60 +57,67 @@ export function CoverageRing({ value, size }: { value: number | null; size: numb
   </View>;
 }
 
-export function HomeDashboard({ data, error, scan, pick, busy, previews, recentError, openPhoto, openScan, ...links }: Links & {
+export function HomeDashboard({ data, error, scan, pick, busy, previews, discovery, recentError, openPhoto, openScan, ...links }: Links & {
   data: Overview | null; error: boolean; scan: () => void; pick: () => void; busy: boolean;
-  previews: Result[]; recentError: boolean; openPhoto: (item: Result) => void; openScan: (id: string) => void;
+  previews: Result[]; discovery: Result | null; recentError: boolean; openPhoto: (item: Result) => void; openScan: (id: string) => void;
 }) {
   const activity = data?.history.find((record) => record.finished != null);
   const photos = previews.filter((item) => item.uri).slice(0, 3);
   const reviewed = activity ? activity.analyzed + activity.cached : 0;
-  const early = isLowCoverage(data?.analyzed ?? data?.localAnalyzed, data?.accessible);
+  const lead = homeLeadAction(data);
   const coverage = data?.accessible == null ? null : ratio(data.analyzed, data.accessible);
   const awaiting = data?.awaiting ?? (data?.accessible != null && data.analyzed != null
     ? Math.max(0, data.accessible - data.analyzed) : null);
+  const discoveryLabel = discovery?.category ?? (discovery?.kind ? titleCase(discovery.kind) : 'Saved reference');
+  const revisit = () => links.discover('suggestions');
+  const homeMood = lead === 'scan' ? 'scanning' as const : discovery?.uri ? 'discovering' as const : 'happy' as const;
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={layout.intro}>
-      <Heading large>Your gallery</Heading>
-      <Body>{data?.localAnalyzed
-        ? `${data.localAnalyzed.toLocaleString()} photos analyzed on this device`
-        : 'Scan your photos to find receipts, screenshots, and other saved references.'}</Body>
-    </View>
-    {data && (coverage != null || awaiting != null) && <Pressable accessibilityRole="button"
-      accessibilityLabel="Gallery coverage" onPress={early ? scan : links.recall}
-      style={({ pressed }) => [layout.coverageStrip, pressed && styles.pressed]}>
       <View style={styles.between}>
-        <Text style={layout.stripTitle}>
-          {data.accessible != null
-            ? `${count(data.analyzed)} of ${count(data.accessible)} accessible`
-            : `${count(data.localAnalyzed)} analyzed`}
-        </Text>
+        <Heading large>Your gallery</Heading>
+        <ActionMenu title="Add photos" label="Add photos" overflow disabled={busy} options={[
+          ...(lead !== 'scan' ? [{ label: awaiting === 0 ? 'Check for new photos' : 'Scan more of your gallery', run: scan }] : []),
+          { label: 'Choose an album', run: links.gallery },
+          ...(lead !== 'pick' ? [{ label: 'Choose individual photos', run: pick }] : []),
+        ]} />
+      </View>
+      <View style={layout.mascotRow}>
+        <NimbyMascot state={homeMood} size={112} />
+        <View style={layout.mascotCopy}>
+          <Body>{data?.localAnalyzed
+            ? `${data.localAnalyzed.toLocaleString()} photos analyzed on this device. Nothing leaves your phone.`
+            : 'Scan your photos on this device to find receipts, screenshots, and other saved references.'}</Body>
+        </View>
+      </View>
+    </View>
+    {lead === 'scan' ? <Button label="Scan gallery" icon="scan" run={scan} disabled={busy} /> :
+      lead === 'pick' ? <Button label="Choose photos" icon="image" run={pick} disabled={busy} /> :
+      <Pressable accessibilityRole="button" accessibilityLabel="Find a photo" onPress={links.recall}
+        style={({ pressed }) => [layout.searchHero, pressed && styles.faded]}>
+        <Icon name="search" size={24} tint={color.blue} />
+        <View style={layout.flex}><Heading>Find a photo</Heading><Body>Try “screenshots with text” or a word you remember</Body></View>
+        <Icon name="chevron" tint={color.muted} />
+      </Pressable>}
+    {discovery?.uri && <View style={layout.section}>
+      <SectionTitle title="Worth revisiting" action="See all picks" run={revisit} />
+      <Pressable accessibilityRole="button" accessibilityLabel={`Open suggested photo, ${discoveryLabel}`}
+        onPress={() => openPhoto(discovery)} style={({ pressed }) => [layout.feature, pressed && styles.faded]}>
+        <Thumbnail uri={discovery.uri} contain style={layout.featurePhoto} />
+        <View style={layout.featureCaption}>
+          <View style={layout.flex}><Heading>{discoveryLabel}</Heading><Body>Suggested by Eye</Body></View>
+          <Icon name="chevron" size={18} tint={color.muted} />
+        </View>
+      </Pressable>
+    </View>}
+    {data && (coverage != null || awaiting != null) && <View style={layout.coverageStrip}>
+      <View style={styles.between}>
+        <Text style={layout.stripTitle}>{count(data.analyzed)} of {count(data.accessible)} photos analyzed</Text>
         <Text style={layout.stripPercent}>{coverage == null ? '—' : percent(coverage)}</Text>
       </View>
       <View style={layout.track}><View style={[layout.fill, { width: widthPercent(coverage ?? 0) }]} /></View>
-      <Body>{early
-        ? (awaiting ? `${count(awaiting)} still to scan · continue to unlock Search` : 'Scan more photos to unlock better search')
-        : (awaiting ? `${count(awaiting)} still to scan` : 'Gallery coverage')}</Body>
-    </Pressable>}
-    <View style={layout.scanGroup}>
-      {early ? <>
-        <Button label="Scan gallery" icon="scan" run={scan} disabled={busy} />
-        <Button label="Search photos" icon="search" subtle run={links.recall} />
-      </> : <>
-        <Button label="Search photos" icon="search" run={links.recall} />
-        <Button label="Scan gallery" icon="scan" subtle run={scan} disabled={busy} />
-      </>}
-      <View style={layout.halves}>
-        <Button label="Phone albums" subtle disabled={busy} run={links.gallery} style={layout.flex} />
-        <Button label="Pick photos" subtle disabled={busy} run={pick} style={layout.flex} />
-      </View>
-    </View>
-    {!!error && <ErrorText>Gallery totals are temporarily unavailable.</ErrorText>}
-    {activity && <View style={layout.section}>
-      <Heading>Last scan</Heading>
-      <Body>{new Date(activity.started).toLocaleDateString()} · {count(reviewed)} with results
-        {activity.failed ? ` · ${count(activity.failed)} failed` : ''}</Body>
-      {activity.hasResults && <Button label="Review scan results" icon="gallery" subtle run={() => openScan(activity.id)} />}
+      {!!awaiting && <Body>{count(awaiting)} still to scan</Body>}
     </View>}
+    {!!error && <ErrorText>Gallery totals are temporarily unavailable.</ErrorText>}
     <View style={layout.section}>
       <SectionTitle title="Recently analyzed" action={photos.length ? 'See all' : undefined} run={() => links.discover('recent')} />
       {!!photos.length && <View style={layout.preview}>
@@ -119,12 +128,17 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
       {!photos.length && <Body>Analyzed photos will appear here.</Body>}
       {recentError && <ErrorText>Recent photos could not be loaded.</ErrorText>}
     </View>
+    {activity && <View style={layout.section}>
+      <Heading>Last scan</Heading>
+      <Body>{new Date(activity.started).toLocaleDateString()} · {count(reviewed)} with results
+        {activity.failed ? ` · ${count(activity.failed)} failed` : ''}</Body>
+      {activity.hasResults && <ActionLink label="Review scan results" run={() => openScan(activity.id)} />}
+    </View>}
     <View style={layout.section}>
       <Heading>Review photos</Heading>
-      <Action icon="bookmark" label="Worth revisiting" value="A short list of saved references"
-        run={() => links.discover('suggestions')} />
+      {!discovery?.uri && <Action icon="bookmark" label="Worth revisiting" value="A short list of saved references" run={revisit} />}
       <Action icon="layers" label="Duplicates" value={data ? `${count(data.duplicateGroups)} groups to review` : undefined} run={links.duplicates} />
-      <Action icon="map" label="Photo Map" run={links.photoMap} />
+      <Action icon="map" label="See where photos were taken" run={links.photoMap} />
     </View>
   </ScrollView>;
 }
@@ -137,7 +151,6 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
   const categories = data?.categories ?? [];
   const totalCategories = categories.reduce((sum, item) => sum + item.count, 0);
   const maximumStorage = Math.max(1, data?.duplicateBytes ?? 0, data?.lowQualityBytes ?? 0);
-  const early = isLowCoverage(data?.analyzed ?? data?.localAnalyzed, data?.accessible);
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={layout.intro}><Heading large>Insights</Heading><Body>A closer look at what’s in your gallery.</Body></View>
     {error && <ErrorText>Could not read the latest gallery totals.</ErrorText>}
@@ -149,7 +162,6 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
         : <Body>{data ? 'Allow photo access to measure coverage.' : 'Reading gallery coverage…'}</Body>}
       {data?.accessible != null && <Text style={layout.caption}>accessible photos analyzed</Text>}
       {data?.awaiting != null && <Text style={layout.insetLabel}>{count(data.awaiting)} still to scan</Text>}
-      {early && links.scan && <Button label="Continue scan" icon="scan" run={links.scan} style={layout.coverageAction} />}
       {data && data.accessible == null && <Button subtle label="Manage gallery access" run={links.gallery} />}
     </View>
     <View style={layout.section}>
@@ -216,21 +228,25 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
         <Icon name={exploreOpen ? 'up' : 'down'} size={18} tint={color.muted} />
       </Pressable>
       {exploreOpen && <>
-        <Action icon="map" label="Photo Map" value="Explore where your photos were taken" run={links.photoMap} />
+        <Action icon="map" label="See where photos were taken" value="Explore where your photos were taken" run={links.photoMap} />
         <Action icon="clock" label="Timeline" value="Browse related moments" run={links.connect} />
         <Action icon="layers" label="Discover patterns" value="See themes that show up over time" run={links.patterns} />
-        <Action icon="chevron" label="Compare next steps" value="Make a plan from saved photos" run={links.parallel} />
-        <Action icon="check" label="Choices and outcomes" value="Remember what worked" run={links.evolve} />
+        <Action icon="chevron" label="Plan from saved photos" value="Make a plan from saved photos" run={links.parallel} />
+        <Action icon="check" label="Review past choices" value="Remember what worked" run={links.evolve} />
       </>}
     </View>
   </ScrollView>;
 }
 
 const layout = StyleSheet.create({
-  intro: { gap: 4 },
+  intro: { gap: 8 },
+  mascotRow: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  mascotCopy: { flex: 1, paddingRight: 4 },
   caption: { color: color.muted, fontSize: 13, fontWeight: '500' },
-  scanGroup: { gap: 8 },
-  halves: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  searchHero: { flexDirection: 'row', alignItems: 'center', gap: 14, borderRadius: 16, backgroundColor: color.tint, padding: 16, minHeight: 76 },
+  feature: { borderRadius: 16, overflow: 'hidden', backgroundColor: color.white },
+  featurePhoto: { aspectRatio: 2.1, maxHeight: 240, backgroundColor: color.black },
+  featureCaption: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
   flex: { flex: 1 },
   section: { gap: 8 },
   preview: { flexDirection: 'row', gap: 8 },
@@ -243,7 +259,6 @@ const layout = StyleSheet.create({
   stripTitle: { color: color.ink, fontWeight: '600', fontSize: 14, flexShrink: 1 },
   stripPercent: { color: color.blue, fontWeight: '700', fontSize: 14, fontVariant: ['tabular-nums'] },
   coverage: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8 },
-  coverageAction: { alignSelf: 'stretch', marginTop: 4 },
   coverageCount: { color: color.ink, fontSize: 22, fontWeight: '600', letterSpacing: -0.6, fontVariant: ['tabular-nums'], textAlign: 'center' },
   ring: { overflow: 'hidden', backgroundColor: color.tint, marginBottom: 10 },
   ringCenter: { position: 'absolute', backgroundColor: color.paper, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, gap: 0 },

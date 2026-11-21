@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import { AppState, PermissionsAndroid, Platform, View } from 'react-native';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AppState, PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
 import { native } from './gallery';
-import { Body, Button, ErrorText, formatBytes, styles } from './ui';
+import { ActionLink, Body, Button, IconButton, color, ErrorText, formatBytes, styles } from './ui';
 
-export function VoiceSearch({ onTranscript, deferPrompt = false }: {
+export function VoiceSearch({ onTranscript, active, deferPrompt = false, children }: {
   onTranscript: (text: string) => void;
-  /** When true, skip the blocking download dialog until the user has searched by text once. */
+  active: boolean;
+  /** Wait until the first search before offering the voice pack. */
   deferPrompt?: boolean;
+  children: ReactNode;
 }) {
   const [phase, setPhase] = useState<'idle' | 'installing' | 'recording' | 'transcribing'>('idle');
   const [error, setError] = useState('');
@@ -41,6 +43,10 @@ export function VoiceSearch({ onTranscript, deferPrompt = false }: {
       cancel(false);
     };
   }, []);
+
+  useEffect(() => {
+    if (!active && busy.current && phase !== 'installing') cancel(true);
+  }, [active, phase]);
 
   async function install() {
     if (!native || busy.current) return;
@@ -117,22 +123,30 @@ export function VoiceSearch({ onTranscript, deferPrompt = false }: {
     }
   }
 
-  if (Number(Platform.Version) < 26) return null;
-  if (phase === 'recording') return <View style={styles.row}>
-    <Button label="Stop recording" run={() => void finish()} />
-    <Button label="Cancel" subtle run={() => cancel(true)} />
-  </View>;
-
   return <View style={styles.column}>
-    <Button label={phase === 'installing' ? 'Downloading voice pack…' : phase === 'transcribing' ? 'Transcribing…' : 'Voice search'}
-      subtle disabled={phase !== 'idle'} run={() => void start()} />
+    <View style={layout.field}>{children}
+      {Number(Platform.Version) >= 26 && (phase === 'recording'
+        ? <IconButton icon="check" label="Stop recording and transcribe" run={() => void finish()} style={layout.icon} />
+        : <IconButton icon="mic" label="Voice search" disabled={phase !== 'idle'} run={() => void start()} style={layout.icon} />)}
+    </View>
+    {phase === 'recording' && <View style={styles.between}><Body>Listening…</Body>
+      <ActionLink label="Cancel recording" run={() => cancel(true)} /></View>}
+    {(phase === 'installing' || phase === 'transcribing') && <Text accessibilityLiveRegion="polite" style={styles.body}>
+      {phase === 'installing' ? 'Downloading voice pack…' : 'Transcribing…'}
+    </Text>}
     {offerDownload && <View style={styles.column}>
       <Body>English voice search needs a one-time download{packBytes != null ? ` (${formatBytes(packBytes)})` : ''}. Transcription stays on this phone.</Body>
       <View style={styles.row}>
         <Button label="Download voice pack" run={() => void install()} />
-        <Button label="Not now" subtle run={() => { setOfferDownload(false); setError(''); }} />
+        <ActionLink label="Not now" run={() => { setOfferDownload(false); setError(''); }} />
       </View>
     </View>}
     {!!error && <ErrorText>{error}</ErrorText>}
   </View>;
 }
+
+const layout = StyleSheet.create({
+  field: { flexDirection: 'row', alignItems: 'center', backgroundColor: color.white, borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
+  icon: { backgroundColor: 'transparent' },
+});

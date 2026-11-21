@@ -1,9 +1,10 @@
+import { ActionMenu } from './ActionSheet';
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import { native, type Access, type Album, type Photo } from './gallery';
 import { ImageViewer } from './ImageViewer';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
-import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, Icon, styles } from './ui';
+import { ActionLink, Body, Button, color, EmptyState, ErrorText, Heading, Icon, styles } from './ui';
 
 export function GalleryScreen({ access, albums, loading, error, album, open, manage, settings, pick, scan, revision }: {
   access: Access; albums: Album[]; loading: boolean; error: string; album: Album | 'recent' | null;
@@ -92,24 +93,18 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
       <View style={layout.title}><Heading large>{scopeName}</Heading>
         {available && !loading && <Body>{scopedCount.toLocaleString()} accessible {scopedCount === 1 ? 'photo' : 'photos'}</Body>}
       </View>
-      {available && scopedCount > 0 && <Chip label={selecting ? 'Done' : 'Select'} selected={selecting}
+      {available && scopedCount > 0 && <ActionLink label={selecting ? 'Done' : 'Select'}
         run={() => selecting ? resetSelection() : setSelecting(true)} />}
+      {available && (!album || access === 'limited') && !selecting &&
+        <ActionMenu title="Gallery options" label="Gallery options" overflow options={[
+          ...(!album ? [{ label: 'Recent photos', run: () => open('recent') }] : []),
+          ...(!album && screenshotAlbum ? [{ label: 'Screenshots', run: () => open(screenshotAlbum) }] : []),
+          ...(access === 'limited' ? [{ label: 'Change shared photos', run: manage }] : []),
+          { label: 'Photo permissions', run: settings },
+        ]} />}
     </View>
-    {!album && <Body>Choose device photos to scan in Nimby</Body>}
+    {!album && <Body>Select the albums you want to scan</Body>}
     {access === 'limited' && <Body>Only photos you shared with Nimby are shown</Body>}
-    {available && !album && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={layout.filters}>
-      <Chip label="Recent photos" run={() => open('recent')} />
-      {screenshotAlbum && <Chip label="Screenshots" run={() => open(screenshotAlbum)} />}
-    </ScrollView>}
-    {available && (access === 'limited' || !album) && <View style={styles.row}>
-      {access === 'limited' && <Chip label="Change shared photos" run={manage} />}
-      {!album && <Chip label="Photo permissions" run={settings} />}
-    </View>}
-    {available && !selecting && scopedCount > 0 &&
-      <Pressable accessibilityRole="button" onPress={() => scan(albumId ? [albumId] : [], [])} style={styles.textAction}>
-        <Icon name="scan" tint={color.blue} size={20} />
-        <Text style={styles.link}>{albumId ? 'Scan this album' : 'Scan all accessible photos'}</Text>
-      </Pressable>}
     {!!error && <ErrorText>{error}</ErrorText>}
     {!!photoError && <ErrorText>{photoError}</ErrorText>}
   </View>;
@@ -119,7 +114,7 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
       keyExtractor={(item) => item.id} extraData={[selecting, selectedAlbums]} ListHeaderComponent={header}
       ListEmptyComponent={loading ? <ActivityIndicator color={color.blue} /> : !available
         ? <EmptyState icon="gallery" title="Allow access to phone albums" text="Allow album access or pick individual photos."
-            action={<View style={styles.row}><Button label="Allow photo access" run={manage} /><Button label="Pick photos" subtle run={pick} /></View>} />
+            action={<View style={styles.row}><Button label="Allow photo access" run={manage} /><ActionLink label="Choose individual photos" run={pick} /></View>} />
         : !error ? <EmptyState icon="gallery" title="No albums here yet" text="Accessible photo albums will appear here." /> : undefined}
       renderTile={(item) => <View style={layout.album}>
         <PhotoTile uri={item.uri} label={`${item.name}, ${item.count} photos`} ratio={1.23}
@@ -140,14 +135,12 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
           longPress={() => { if (!allPhotos) { setSelecting(true); toggle(setSelectedPhotos, item.uri); } }} />} />}
     {available && selecting && <View style={layout.actions}>
       {album ? <>
-        {allPhotos && <Button label={`Scan ${scopedCount} accessible photos`} run={() => scan([], [])} />}
+        {allPhotos && <Button label={`Scan ${scopedCount} photos`} run={() => scan(albumId ? [albumId] : [], [])} />}
         {!allPhotos && selectedPhotos.size > 0 && <Button label={`Scan ${selectedPhotos.size} selected`} run={() => scan([], [...selectedPhotos])} />}
-        {album === 'recent' ? <Button label={allPhotos ? 'Clear selection' : 'Select all accessible photos'}
-          subtle disabled={scopedCount === 0} run={() => { setAllPhotos(!allPhotos); setSelectedPhotos(new Set()); }} />
-          : selectedPhotos.size === 0 && <Button label="Scan this album" subtle disabled={!scopedCount}
-              run={() => scan(albumId ? [albumId] : [], [])} />}
-      </> : <Button label={`Scan ${selectedAlbums.size} selected ${selectedAlbums.size === 1 ? 'album' : 'albums'}`}
-        disabled={!selectedAlbums.size} run={() => scan([...selectedAlbums], [])} />}
+        <ActionLink label={allPhotos ? 'Clear selection' : 'Select all photos'} disabled={scopedCount === 0}
+          run={() => { setAllPhotos(!allPhotos); setSelectedPhotos(new Set()); }} />
+      </> : selectedAlbums.size > 0 && <Button label={`Scan ${selectedAlbums.size} selected ${selectedAlbums.size === 1 ? 'album' : 'albums'}`}
+        run={() => scan([...selectedAlbums], [])} />}
     </View>}
     {preview && <ImageViewer uri={preview.uri} album={preview.album} label={preview.name} close={() => setPreview(null)}>
       <Heading>{preview.name}</Heading>
@@ -160,7 +153,6 @@ const layout = StyleSheet.create({
   fill: { flex: 1 },
   header: { gap: 12, paddingBottom: 8 },
   title: { flex: 1, gap: 4 },
-  filters: { gap: 8 },
   album: { paddingBottom: 12, gap: 2 },
   albumName: { fontSize: 15, fontWeight: '600', color: color.ink, marginTop: 4 },
   count: { fontSize: 12, color: color.muted },

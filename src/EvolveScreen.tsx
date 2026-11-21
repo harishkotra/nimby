@@ -1,3 +1,4 @@
+import { ActionMenu } from './ActionSheet';
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useDialog } from './Dialogs';
@@ -5,7 +6,7 @@ import {
   readCorrections, readEvolveState, writeOutcome,
   type Correction, type CorrectionSection, type EvolveChoice, type EvolveState, type OutcomeRating,
 } from './evolve';
-import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, styles } from './ui';
+import { ActionLink, Body, Button, Segments, color, EmptyState, ErrorText, Heading, styles } from './ui';
 
 export type EvolveScreenProps = {
   loadState: () => Promise<string | null>;
@@ -129,17 +130,15 @@ export function EvolveScreen({
   const visible = choices.filter((choice) => filter === 'all' || (filter === 'recorded' ? !!choice.outcome : !choice.outcome));
   const entries = section ? corrections[section] : [];
   const header = <View style={styles.column}>
-    <Heading large>Evolve</Heading>
+    <Heading large>Review past choices</Heading>
     <Body>Record what helped so Nimby can give useful photos and next steps a little more weight.</Body>
-    <View style={styles.row}>
-      <Chip label="Choices" selected={section === null} run={() => setSection(null)} />
-      <Chip label="Pattern feedback" selected={section === 'patterns'} run={() => { setDraft(null); setSection('patterns'); }} />
-      <Chip label="Event edits" selected={section === 'connect'} run={() => { setDraft(null); setSection('connect'); }} />
-    </View>
-    {!section && choices.length > 0 && <View style={styles.row}>
-      {filters.map(({ label, value }) => <Chip key={value} label={label} selected={filter === value}
-        run={() => { setDraft(null); setFilter(value); }} />)}
-    </View>}
+    <Segments options={[{ value: 'choices', label: 'Choices' }, { value: 'feedback', label: 'Feedback' }]}
+      value={section ? 'feedback' : 'choices'} select={(value) => { setDraft(null); setSection(value === 'choices' ? null : 'patterns'); }} />
+    {section ? <ActionMenu title="Feedback type" label={section === 'patterns' ? 'Pattern feedback' : 'Event edits'} options={[
+      { label: 'Pattern feedback', selected: section === 'patterns', run: () => setSection('patterns') },
+      { label: 'Event edits', selected: section === 'connect', run: () => setSection('connect') },
+    ]} /> : choices.length > 0 && <ActionMenu title="Show choices" label={filters.find((item) => item.value === filter)?.label ?? 'All choices'}
+      options={filters.map(({ label, value }) => ({ label, selected: filter === value, run: () => { setDraft(null); setFilter(value); } }))} />}
     {!!error && <View style={styles.column}>
       <ErrorText>{error}</ErrorText>
       <Button label="Reload activity" subtle disabled={busy || loading} run={() => setRetry((value) => value + 1)} />
@@ -152,7 +151,7 @@ export function EvolveScreen({
     ListEmptyComponent={loading || error ? undefined : <EmptyState icon="layers" title="No feedback yet"
       text={section === 'patterns' ? 'Confirm, correct, or hide a suggestion in Discover.'
         : 'Confirm, rename, split, or merge an event in Connect.'} />}
-    ListFooterComponent={entries.length && resetCorrections ? <Button label="Clear feedback" destructive
+    ListFooterComponent={entries.length && resetCorrections ? <ActionLink label="Clear feedback" danger
       disabled={busy || loading} run={() => confirmCorrections(section)} /> : undefined}
     renderItem={({ item }) => <View style={layout.entry}>
       <Heading>{item.title}</Heading>
@@ -164,7 +163,7 @@ export function EvolveScreen({
     ListEmptyComponent={loading || state == null ? undefined : <EmptyState icon="clock"
       title={choices.length ? 'No choices match this filter' : 'No choices saved'}
       text={choices.length ? 'Choose another filter to see your saved next steps.' : 'Choose a next step in Parallel and it will appear here.'} />}
-    ListFooterComponent={recorded ? <Button label="Clear all outcomes" destructive
+    ListFooterComponent={recorded ? <ActionLink label="Clear all outcomes" danger
       disabled={busy || loading} run={() => confirmRemoval()} /> : undefined}
     renderItem={({ item }) => <View style={layout.entry}>
       <Heading>{item.title}</Heading>
@@ -172,10 +171,8 @@ export function EvolveScreen({
       {!!item.constraints && <Body>{item.constraints}</Body>}
       {draft?.id === item.id ? <View style={styles.column}>
         <Text style={layout.label}>How did it go?</Text>
-        <View style={styles.row}>
-          {ratings.map(({ value, label }) => <Chip key={value} label={label} selected={draft.rating === value}
-            run={() => setDraft({ ...draft, rating: value })} />)}
-        </View>
+        <ActionMenu title="How did it go?" label={ratings.find((item) => item.value === draft.rating)?.label ?? 'Choose an outcome'}
+          options={ratings.map(({ label, value }) => ({ label, selected: draft.rating === value, run: () => setDraft({ ...draft, rating: value }) }))} />
         <TextInput value={draft.note} onChangeText={(note) => setDraft({ ...draft, note })}
           accessibilityLabel="Outcome notes" placeholder="Add a note (optional)" placeholderTextColor={color.muted}
           multiline editable={!busy} maxLength={1000} style={layout.input} />
@@ -185,7 +182,7 @@ export function EvolveScreen({
             const outcome = { rating: draft.rating, note: draft.note, at: Date.now() };
             void update((current) => writeOutcome(current, item.id, outcome));
           }} />
-          <Button label="Cancel" subtle disabled={busy} run={() => setDraft(null)} />
+          <ActionLink label="Cancel" disabled={busy} run={() => setDraft(null)} />
         </View>
       </View> : <>
         {item.outcome && <View style={layout.outcome}>
@@ -193,10 +190,11 @@ export function EvolveScreen({
           {!!item.outcome.note && <Body>{item.outcome.note}</Body>}
         </View>}
         <View style={styles.row}>
-          <Button label={item.outcome ? 'Edit outcome' : 'Record outcome'} subtle disabled={busy || loading} run={() => setDraft({
+          <ActionLink label={item.outcome ? 'Edit outcome' : 'Record outcome'} disabled={busy || loading} run={() => setDraft({
             id: item.id, rating: item.outcome?.rating ?? null, note: item.outcome?.note ?? '',
           })} />
-          {item.outcome && <Button label="Clear outcome" subtle disabled={busy || loading} run={() => confirmRemoval(item)} />}
+          {item.outcome && <ActionMenu title="Outcome actions" label="More outcome actions" overflow disabled={busy || loading}
+            options={[{ label: 'Clear outcome', danger: true, run: () => confirmRemoval(item) }]} />}
         </View>
       </>}
     </View>} />;

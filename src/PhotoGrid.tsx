@@ -16,14 +16,14 @@ export function PhotoGrid<T>({ desired = 3, renderTile, ...props }: Omit<FlatLis
     renderItem={({ item }) => <View style={{ width: tile }}>{renderTile(item, tile)}</View>} />;
 }
 
-export function PhotoTile({ uri, label, press, longPress, selected, fade, children, ratio = 1 }: {
+export function PhotoTile({ uri, label, press, longPress, selected, fade, children, ratio = 1, contain }: {
   uri: string | null; label: string; press: () => void; longPress?: () => void; selected?: boolean;
-  fade?: number; children?: ReactNode; ratio?: number;
+  fade?: number; children?: ReactNode; ratio?: number; contain?: boolean;
 }) {
   return <Pressable accessibilityRole={selected === undefined ? 'button' : 'checkbox'}
     accessibilityLabel={label} accessibilityState={selected === undefined ? undefined : { checked: selected }}
     onPress={press} onLongPress={longPress} style={({ pressed }) => [grid.tile, { aspectRatio: ratio }, pressed && { opacity: 0.82 }]}>
-    <Thumbnail uri={uri} fade={fade} style={StyleSheet.absoluteFill} />
+    <Thumbnail uri={uri} fade={fade} contain={contain} style={StyleSheet.absoluteFill} />
     {children}
     {selected !== undefined && <View style={[grid.marker, selected && grid.markerActive]}>
       {!!selected && <Icon name="check" size={15} tint={color.paper} />}

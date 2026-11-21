@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import { Modal, ScrollView, StyleSheet, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Body, Button, color, Heading, useReducedMotion } from './ui';
+import { ActionLink, Body, Button, color, Heading, useReducedMotion } from './ui';
 
 type Action = { label: string; run: () => void; destructive?: boolean };
 type DialogRequest = { title: string; message: string; action?: Action };
@@ -18,6 +18,11 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const [request, show] = useState<DialogRequest | null>(null);
   const reduced = useReducedMotion();
   const dismiss = () => show(null);
+  const confirm = () => {
+    const action = request?.action;
+    dismiss();
+    action?.run();
+  };
 
   return <DialogContext.Provider value={show}>
     {children}
@@ -30,12 +35,13 @@ export function DialogProvider({ children }: { children: ReactNode }) {
             <Body>{request.message}</Body>
           </ScrollView>
           {request.action ? <View style={layout.actions}>
-            <Button label={request.action.label} destructive={request.action.destructive} run={() => {
-              const action = request.action;
-              dismiss();
-              action?.run();
-            }} />
-            <Button label="Cancel" subtle run={dismiss} />
+            {request.action.destructive ? <>
+              <Button label="Cancel" run={dismiss} />
+              <View style={layout.secondary}><ActionLink label={request.action.label} danger run={confirm} /></View>
+            </> : <>
+              <Button label={request.action.label} run={confirm} />
+              <Button label="Cancel" subtle run={dismiss} />
+            </>}
           </View> : <Button label="Done" run={dismiss} />}
         </View>
       </SafeAreaView>
@@ -50,4 +56,5 @@ const layout = StyleSheet.create({
   scroll: { flexGrow: 0 },
   message: { gap: 8 },
   actions: { gap: 8 },
+  secondary: { alignItems: 'center' },
 });

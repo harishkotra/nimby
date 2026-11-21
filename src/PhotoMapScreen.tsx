@@ -1,9 +1,10 @@
+import { ActionMenu } from './ActionSheet';
 import { requireNativeView } from 'expo';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, FlatList, Linking, PermissionsAndroid, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';
 import { native as gallery, type MapBounds, type MapPage, type PhotoLocationStatus, type Result } from './gallery';
-import { Body, Button, Chip, color, ErrorText, Heading, Icon, styles, Thumbnail } from './ui';
+import { ActionLink, Body, Button, color, ErrorText, Heading, Icon, styles, Thumbnail } from './ui';
 import { useDialog } from './Dialogs';
 
 type Viewport = MapBounds & { zoom: number };
@@ -231,13 +232,17 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
     <View style={layout.header}>
       <View style={styles.between}>
         <Heading large>Photo map</Heading>
-        {active && <Button label={scope ? 'Show map' : 'Photo list'} subtle run={() => setScope(scope ? null : allPhotos)} />}
+        {active && <ActionMenu title="Photo map options" label="Map options" overflow options={[
+          { label: scope ? 'Show map' : 'Show photo list', run: () => setScope(scope ? null : allPhotos) },
+          ...((status.mapped > 0 || coveredCount > 0) ? [{ label: 'Clear locations', danger: true, run: confirmClear }] : []),
+        ]} />}
       </View>
-      {active ? <View style={styles.row}>
-        <Chip label="Any date" selected={filter === 'all'} run={() => setTime('all')} />
-        <Chip label="This year" selected={filter === 'year'} run={() => setTime('year')} />
-        <Chip label="Past 30 days" selected={filter === 'month'} run={() => setTime('month')} />
-      </View> : <Body>Pinch to zoom · drag with two fingers to pan once locations are on.</Body>}
+      {active ? <ActionMenu title="Photo dates" label={filter === 'all' ? 'Any date' : filter === 'year' ? 'This year' : 'Past 30 days'}
+        options={[
+          { label: 'Any date', selected: filter === 'all', run: () => setTime('all') },
+          { label: 'This year', selected: filter === 'year', run: () => setTime('year') },
+          { label: 'Past 30 days', selected: filter === 'month', run: () => setTime('month') },
+        ]} /> : <Body>See places saved in your photos. Locations stay on this phone.</Body>}
       {statusError ? <ErrorText>{statusError}</ErrorText> : null}
     </View>
     {!active && status ? <View style={layout.emptyCard}>
@@ -247,7 +252,7 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
     {active && scope ? <FlatList style={layout.content} contentContainerStyle={layout.list}
       data={photos} keyExtractor={(item) => item.sourceKey ?? item.uri ?? item.id}
       ListHeaderComponent={<View style={layout.listHeader}><Heading>{scope.id ? 'Photos in this area' : 'Photos with locations'}</Heading>
-        {scope.id && <Button label="Show all mapped photos" subtle run={() => setScope(allPhotos)} />}
+        {scope.id && <ActionLink label="Show all mapped photos" run={() => setScope(allPhotos)} />}
       </View>}
       renderItem={({ item }) => <Pressable accessibilityRole="button" accessibilityLabel={item.name} onPress={() => open(item)}
         style={({ pressed }) => [layout.photoRow, pressed && styles.faded]}>
@@ -281,14 +286,12 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
       {!active ? status ? <View style={layout.emptyFooter}>
         <Body>Nimby can read GPS from photos you allow. Coordinates stay on this phone.</Body>
         <Button label="Enable photo locations" disabled={busy} run={() => void enable()} />
-        {status.enabled && status.mapped > 0 && <Button label="Clear locations" subtle disabled={busy} run={confirmClear} />}
       </View> : statusError ? <Button label="Retry" subtle run={() => setRetry((value) => value + 1)} />
         : <ActivityIndicator color={color.blue} /> : <View style={styles.between}>
         <Body>{status.running || status.pending ? 'Reading photo locations…'
           : ready && coveredCount === 0 ? 'No accessible photos with GPS match these dates'
           : !scope && ready && clusters.length === 0 ? 'No mapped photos in this view'
           : `${coveredCount.toLocaleString()} ${coveredCount === 1 ? 'photo' : 'photos'} with locations`}</Body>
-        {(status.mapped > 0 || coveredCount > 0) && <Button label="Clear locations" subtle disabled={busy} run={confirmClear} />}
       </View>}
     </View>
   </View>;
