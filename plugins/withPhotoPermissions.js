@@ -37,8 +37,8 @@ module.exports = (config) => withGradleProperties(withEyeCpuRuntime(withPhotoPer
   // Eye 4.3.0 supplies native libraries for these two architectures.
   const properties = {
     reactNativeArchitectures: 'arm64-v8a,x86_64',
-    // LiteRT-LM 0.19.1 publishes Kotlin 2.4 metadata.
-    'android.kotlinVersion': '2.4.21',
+    // Use the Kotlin 2.4 release supported by this SDK's compiler plugins.
+    'android.kotlinVersion': '2.4.20',
   };
   result.modResults = result.modResults.filter((entry) => entry.type !== 'property' || !Object.hasOwn(properties, entry.key));
   for (const [key, value] of Object.entries(properties)) result.modResults.push({ type: 'property', key, value });

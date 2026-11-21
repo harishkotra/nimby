@@ -117,7 +117,7 @@ sequenceDiagram
 | Follow-ups | `NextStepNotifications.kt` schedules local notifications through WorkManager. Tapping one opens the linked follow-up. `FunctionGemma.kt` offers optional local action suggestions. |
 | Storage | `GalleryMemory.kt` owns schema migrations, Eye analysis, FTS4 text and metadata, source-specific photo locations, and the archive. Schema version 8 adds saved follow-up state and reminder due times. `PersonalMemory.kt` stores local event edits, pattern feedback, and outcomes. |
 | Retailer search | `server/product-search.mjs` is an optional, dependency-free Node proxy for Tavily. Nimby can also open Google Shopping in the browser. |
-| Android host | `android/` contains the native app configuration, including Kotlin 2.4.21 and CPU-only LiteRT packaging. |
+| Android host | `android/` contains the native app configuration, including Kotlin 2.4.20 and CPU-only LiteRT packaging. |
 
 ## On-device models
 
@@ -168,7 +168,7 @@ Run `npm run product-search` in a separate terminal, then run `adb reverse tcp:8
 
 Use Node.js 22.18 or later, JDK 17, Android Studio, and the Android SDK. Use an `arm64-v8a` or `x86_64` device or emulator running Android 7 or later. Set `ANDROID_HOME` or create a local `android/local.properties` with your SDK path. Check that `adb devices` lists your target.
 
-The Android build pins Kotlin 2.4.21 for LiteRT-LM 0.19.1. Gradle installs the compiler as part of the build.
+The Android build pins Kotlin 2.4.20, which has matching Expo compiler plugins and reads the Kotlin 2.4 metadata in LiteRT-LM 0.19.1. Gradle installs the compiler as part of the build.
 
 1. Download `eye.tflite` and `eye_meta.json` from the [official Eye v1.0.0 release](https://huggingface.co/desert-ant-labs/eye/tree/v1.0.0), review the upstream terms, and place both files in `modules/nimby-gallery/android/src/main/assets/eye/`. They are packaged into the app at build time. Each clone obtains these separately from the model publisher.
 2. Generate a local Android debug key once if `android/app/debug.keystore` is absent. That file is for local builds and stays out of Git.
