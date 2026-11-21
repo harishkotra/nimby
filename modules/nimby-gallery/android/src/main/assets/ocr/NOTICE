@@ -1,0 +1,7 @@
+Nimby bundles the English integer LSTM language data from Tesseract OCR's
+tessdata_fast release 4.1.0 under the Apache License, Version 2.0.
+
+Upstream: https://github.com/tesseract-ocr/tessdata_fast/blob/4.1.0/eng.traineddata
+SHA-256: 7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2
+
+The file is distributed unmodified.
