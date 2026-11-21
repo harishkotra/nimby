@@ -1,13 +1,14 @@
 package dev.nimby.gallery
 
+import android.app.Activity
+import android.app.Application
 import android.content.Context
 import android.graphics.Color
 import android.graphics.RectF
+import android.os.Bundle
+import android.view.View
 import android.view.View.OnLayoutChangeListener
 import android.widget.LinearLayout
-import com.facebook.react.bridge.LifecycleEventListener
-import com.facebook.react.bridge.ReactContext
-import com.facebook.react.common.LifecycleState
 import expo.modules.kotlin.AppContext
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -40,7 +41,7 @@ class PhotoMapModule : Module() {
     }
 }
 
-internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView(context, appContext), LifecycleEventListener {
+internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView(context, appContext) {
     override val shouldUseAndroidLayout = true
     private val onViewport by EventDispatcher()
     private val onCluster by EventDispatcher()
@@ -48,6 +49,22 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
     private var mapView: MapView? = null
     private var map: MapLibreMap? = null
     private var running = false
+    private var host: Activity? = null
+    private val activityCallbacks = object : Application.ActivityLifecycleCallbacks {
+        override fun onActivityCreated(activity: Activity, state: Bundle?) = Unit
+        override fun onActivityStarted(activity: Activity) = Unit
+        override fun onActivityResumed(activity: Activity) {
+            if (activity === host) resumeMap()
+        }
+        override fun onActivityPaused(activity: Activity) {
+            if (activity === host) pauseMap()
+        }
+        override fun onActivityStopped(activity: Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: Activity, state: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) {
+            if (activity === host) releaseMap()
+        }
+    }
     private var points: String? = null
     private var fit: String? = null
     private var pendingFit = true
@@ -60,7 +77,6 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        val react = appContext.reactContext as? ReactContext
         MapLibre.getInstance(context)
         MapLibre.setConnected(false)
         val surface = MapView(context, MapLibreMapOptions.createFromAttributes(context)
@@ -92,19 +108,20 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
             }
         }
         pendingFit = true
-        react?.addLifecycleEventListener(this)
-        if (react?.lifecycleState == LifecycleState.RESUMED) onHostResume()
+        host = appContext.currentActivity
+        host?.application?.registerActivityLifecycleCallbacks(activityCallbacks)
+        // Views usually attach after the host has already resumed.
+        if (windowVisibility == View.VISIBLE) resumeMap()
         addOnLayoutChangeListener(mapLayoutListener)
     }
 
     override fun onDetachedFromWindow() {
         removeOnLayoutChangeListener(mapLayoutListener)
-        (appContext.reactContext as? ReactContext)?.removeLifecycleEventListener(this)
         releaseMap()
         super.onDetachedFromWindow()
     }
 
-    override fun onHostResume() {
+    private fun resumeMap() {
         val surface = mapView ?: return
         if (running) return
         surface.onStart()
@@ -112,7 +129,7 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
         running = true
     }
 
-    override fun onHostPause() {
+    private fun pauseMap() {
         val surface = mapView ?: return
         if (!running) return
         surface.onPause()
@@ -120,11 +137,11 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
         running = false
     }
 
-    override fun onHostDestroy() = releaseMap()
-
     private fun releaseMap() {
+        host?.application?.unregisterActivityLifecycleCallbacks(activityCallbacks)
+        host = null
         val surface = mapView ?: return
-        onHostPause()
+        pauseMap()
         map = null
         mapView = null
         surface.onDestroy()
