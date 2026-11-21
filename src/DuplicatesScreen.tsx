@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
-import { confirmArchive } from './ArchiveScreen';
+import { useArchiveConfirmation } from './ArchiveScreen';
 import { ImageViewer } from './ImageViewer';
 import { PhotoTile } from './PhotoGrid';
 import { native, type DuplicateGroup, type DuplicatePhoto } from './gallery';
@@ -9,6 +9,7 @@ import { Body, Button, color, ErrorText, formatBytes, Heading, percent, styles }
 const maxArchiveSelection = 200;
 
 function Group({ group, changed }: { group: DuplicateGroup; changed: () => void }) {
+  const confirmArchive = useArchiveConfirmation();
   const [keeper, setKeeper] = useState(group.photos[0]?.uri);
   const [selected, setSelected] = useState(new Set<string>());
   const [choosingKeeper, setChoosingKeeper] = useState(false);

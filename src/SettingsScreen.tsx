@@ -1,5 +1,6 @@
+import { useDialog } from './Dialogs';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { native, scanActive, type Access, type Album, type EyeStatus, type Processing, type Scan, type ScanRecord } from './gallery';
 import { Body, Button, Chip, color, ErrorText, formatBytes, Heading, Icon, type IconName, styles } from './ui';
 
@@ -32,6 +33,7 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
   access: Access; scan: Scan; openPermissionSettings: () => void; revision: number; changed: () => void;
   openArchive: () => void; onResume: () => void; openScan: (id: string) => void;
 }) {
+  const show = useDialog();
   const [status, setStatus] = useState<EyeStatus | null>(null);
   const [statusError, setStatusError] = useState(false);
   const [requestError, setRequestError] = useState('');
@@ -92,15 +94,16 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
 
   function confirmClear(all: boolean) {
     const label = all ? 'Delete analysis metadata' : 'Clear analysis cache';
-    Alert.alert(label, all ? 'Remove the photo index, scan history, and Keep, Dismiss, and collection decisions from Nimby. Gallery originals and archive records stay in place.'
-      : 'Remove cached Eye results and embeddings. Decisions and scan history stay in Nimby. Gallery originals are safe.', [
-      { text: 'Cancel', style: 'cancel' }, { text: label, style: 'destructive', onPress: async () => {
+    show({ title: label, message: all
+      ? 'Remove the photo index, scan history, and photo decisions from Nimby. Your original photos and archive records stay in place.'
+      : 'Remove cached Eye results and embeddings. Photo decisions, scan history, and your originals stay in place.',
+      action: { label, destructive: true, run: async () => {
         setPrivacyBusy(true);
         try { await native?.clearAnalysis(all); changed(); }
         catch (error) { setRequestError(error instanceof Error ? error.message : 'Could not clear analysis data.'); }
         finally { setPrivacyBusy(false); }
       } },
-    ]);
+    });
   }
 
   async function runCheck() {
@@ -135,7 +138,7 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
     </View>
     <View style={layout.panel}>
       <View style={layout.modelHeader}>
-        <View style={layout.modelIcon}><Icon name="spark" tint={color.blue} /></View>
+        <View style={layout.modelIcon}><Icon name="scan" tint={color.blue} /></View>
         <View style={layout.modelText}><Heading>Desert Ant Eye</Heading><Body>Runs on your device</Body></View>
       </View>
       <View style={styles.row}>
@@ -223,24 +226,24 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
 }
 
 const layout = StyleSheet.create({
-  intro: { gap: 6 },
-  panel: { backgroundColor: color.white, borderRadius: 23, padding: 17, gap: 10 },
-  modelHeader: { flexDirection: 'row', alignItems: 'center', gap: 11 },
-  modelIcon: { width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: color.tint },
+  intro: { gap: 8 },
+  panel: { backgroundColor: color.white, borderRadius: 16, padding: 16, gap: 12 },
+  modelHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  modelIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: color.tint },
   modelText: { flex: 1, gap: 2 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.blue },
   errorDot: { backgroundColor: color.danger },
-  status: { color: color.ink, fontSize: 14, fontWeight: '700', flexShrink: 1 },
-  section: { gap: 7 },
+  status: { color: color.ink, fontSize: 14, fontWeight: '600', flexShrink: 1 },
+  section: { gap: 8 },
   details: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingVertical: 6 },
   detail: { flexBasis: '46%', flexGrow: 1, gap: 4 },
   detailLabel: { color: color.muted, fontSize: 13 },
-  value: { color: color.ink, fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
-  permission: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 5 },
-  action: { minHeight: 48, paddingVertical: 5, flexDirection: 'row', alignItems: 'center', gap: 11 },
+  value: { color: color.ink, fontSize: 15, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  permission: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 4 },
+  action: { minHeight: 48, paddingVertical: 4, flexDirection: 'row', alignItems: 'center', gap: 12 },
   actionTitle: { color: color.ink, flex: 1, fontSize: 14, fontWeight: '600' },
   danger: { color: color.danger },
-  history: { gap: 10, paddingVertical: 5 },
+  history: { gap: 10, paddingVertical: 4 },
   historyItem: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   historyDot: { width: 7, height: 7, borderRadius: 4, marginTop: 7, backgroundColor: color.blue },
 });

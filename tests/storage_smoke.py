@@ -10,6 +10,7 @@ KOTLIN = NATIVE / "java/dev/nimby/gallery"
 MEMORY = (KOTLIN / "GalleryMemory.kt").read_text()
 BRIDGE = (KOTLIN / "GalleryModule.kt").read_text()
 ARCHIVE_UI = (ROOT / "src/ArchiveScreen.tsx").read_text()
+DIALOG_UI = (ROOT / "src/Dialogs.tsx").read_text()
 
 
 def body(start, end):
@@ -104,6 +105,9 @@ def test_deletion_wiring():
     assert "contentResolver.delete(" not in BRIDGE
     assert "Permanently delete these originals?" in ARCHIVE_UI
     assert "Continue to Android" in ARCHIVE_UI
+    assert "action?.run()" in DIALOG_UI
+    assert 'label="Cancel" subtle run={dismiss}' in DIALOG_UI
+    assert "Alert.alert" not in ARCHIVE_UI
     assert (NATIVE / "assets/eye/self-test.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
@@ -142,8 +146,40 @@ def test_scan_results():
     assert scalar(db, "SELECT COUNT(*) FROM scan_results WHERE scan_id=3") == 0
 
 
+def test_revisit_queries():
+    db = connect(":memory:")
+    run(db, body("override fun onCreate", "override fun onUpgrade"))
+    migrate(db)
+    images = [(i, "Screenshots", "new", 1_000 + i, 0) for i in range(1, 105)]
+    images += [
+        (105, "Receipts", "new", 200, 1),
+        (106, "Receipts", "new", 100, 0),
+        (107, "Documents", "new", 30, 0),
+        (108, "Shopping references", "kept", 40, 0),
+        (109, "Notes and whiteboards", "new", 50, 0),
+    ]
+    db.executemany("""INSERT INTO images(id, fingerprint, status, category, decision, analyzed, low_quality)
+        VALUES (?1, ?1, 'complete', ?2, ?3, ?4, ?5)""", images)
+    db.executemany("""INSERT INTO sources(uri,image_id,name,album,bucket,source,media_id,captured,width,height,bytes,modified,version)
+        VALUES (?,?,'Photo','Camera','camera','gallery',0,0,384,384,10,0,'v1')""",
+        [(f"content://{photo[0]}", photo[0]) for photo in images])
+    db.execute("INSERT INTO archive VALUES('content://109','Photo','Camera',10,'v1',1,2,0)")
+
+    pending = body("fun revisitPicks(", "fun feed(")
+    visible = re.search(r'private val visible = """(.*?)"""', MEMORY, re.S).group(1)
+    eligible = re.search(r'val eligible = """(.*?)"""', pending, re.S).group(1)
+    eligible = eligible.replace("$visible", visible).replace("$filter", "AND id NOT IN (?)")
+    category_query = re.search(r'rawQuery\("""(SELECT category.*?)"""', pending, re.S).group(1)
+    pick_query = re.search(r'rawQuery\("""(SELECT id.*?)"""', pending, re.S).group(1)
+    categories = [row[0] for row in db.execute(category_query.replace("$eligible", eligible), (104,))]
+    assert categories == ["Receipts", "Documents", "Screenshots"]
+    assert db.execute(pick_query.replace("$eligible", eligible), (104, "Receipts")).fetchone()[0] == 106
+    assert db.execute(pick_query.replace("$eligible", eligible), (104, "Screenshots")).fetchone()[0] == 103
+
+
 if __name__ == "__main__":
     test_storage()
     test_deletion_wiring()
     test_scan_results()
-    print("Migration, scan result scope, archive persistence/restore, cached version SQL, and deletion authorization wiring passed")
+    test_revisit_queries()
+    print("Migration, scan scope, revisit ranking, archive/restore, cache, and deletion authorization wiring passed")

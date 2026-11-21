@@ -1,23 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useDialog } from './Dialogs';
 import { ImageViewer } from './ImageViewer';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
 import { native, type ArchivedPhoto } from './gallery';
 import { Body, Button, Chip, color, EmptyState, ErrorText, formatBytes, Heading, Icon, IconButton, styles, Thumbnail, useReducedMotion } from './ui';
 
-export function confirmArchive(uris: string[], success: () => void) {
-  if (uris.length === 0) return;
-  Alert.alert(`Archive ${uris.length === 1 ? 'this photo' : `${uris.length} photos`}?`,
-    'Archived photos are hidden in Nimby. Your originals stay in the gallery. You can restore these items at any time.', [
-      { text: 'Cancel', style: 'cancel' }, { text: 'Archive', onPress: () => {
-        native?.archive(uris).then(success).catch((error: unknown) =>
-          Alert.alert('Could not archive photos', error instanceof Error ? error.message : 'Check that the originals are accessible.'));
+export function useArchiveConfirmation() {
+  const show = useDialog();
+  return (uris: string[], success: () => void) => {
+    if (!uris.length) return;
+    show({
+      title: uris.length === 1 ? 'Archive this photo?' : `Archive ${uris.length} photos?`,
+      message: 'This hides the photos in Nimby. Originals stay on your phone, and you can restore them in Nimby at any time.',
+      action: { label: 'Archive', run: () => {
+        native?.archive(uris).then(success).catch((error: unknown) => show({
+          title: 'Could not archive photos',
+          message: error instanceof Error ? error.message : 'Check that the originals are accessible.',
+        }));
       } },
-    ]);
+    });
+  };
 }
 
 export function ArchiveScreen({ revision, scanning, changed }: { revision: number; scanning: boolean; changed: () => void }) {
+  const show = useDialog();
   const [items, setItems] = useState<ArchivedPhoto[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [more, setMore] = useState(false);
@@ -76,21 +84,25 @@ export function ArchiveScreen({ revision, scanning, changed }: { revision: numbe
 
   function deleteConfirmed() {
     if (busy || scanning) return;
-    Alert.alert('Permanently delete these originals?', `Android will ask you to approve deletion of ${review.length} original photos. Deleted files may be impossible to recover.`, [
-      { text: 'Cancel', style: 'cancel' }, { text: 'Continue to Android', style: 'destructive', onPress: async () => {
+    show({
+      title: 'Permanently delete these originals?',
+      message: `Android will ask you to approve deletion of ${review.length} original photos. Deleted files may be impossible to recover.`,
+      action: { label: 'Continue to Android', destructive: true, run: async () => {
         setBusy(true);
         try {
           const result = await native?.deleteArchived(review.map((item) => item.id));
           setReview([]);
           changed();
           if (result?.approved && result.removed !== result.requested) {
-            Alert.alert('Deletion could not be fully verified', `${result.removed} of ${result.requested} deletions were confirmed. Unverified items stay in the archive.`);
+            show({ title: 'Deletion could not be fully verified',
+              message: `${result.removed} of ${result.requested} deletions were confirmed. Unverified items stay in the archive.` });
           }
         } catch (cause) {
-          Alert.alert('Deletion review unavailable', cause instanceof Error ? cause.message : 'The selection could not be verified.');
+          show({ title: 'Deletion review unavailable',
+            message: cause instanceof Error ? cause.message : 'The selection could not be verified.' });
         } finally { setBusy(false); }
       } },
-    ]);
+    });
   }
 
   const selectedItems = items.filter((item) => selected.has(item.id));
@@ -116,7 +128,7 @@ export function ArchiveScreen({ revision, scanning, changed }: { revision: numbe
             setSelected(new Set());
           }} />}
         </View>
-        <Body>Set photos aside and find them again whenever you need them.</Body>
+        <Body>Photos you set aside in Nimby</Body>
         <View style={layout.notice}>
           <View style={layout.noticeIcon}><Icon name="clock" tint={color.blue} /></View>
           <View style={layout.description}>
@@ -129,7 +141,7 @@ export function ArchiveScreen({ revision, scanning, changed }: { revision: numbe
       ListFooterComponent={loading ? <ActivityIndicator color={color.blue} /> : error ?
         <Button label="Retry" subtle run={() => void load(items.length)} /> : undefined}
       ListEmptyComponent={!loading && !error ? <EmptyState icon="archive" title="Your archive is empty"
-        text="Photos archived from Worth Revisiting or duplicate review will appear here." /> : undefined}
+        text="Photos archived from Revisit or duplicate review will appear here." /> : undefined}
       renderTile={(item) => {
         const days = daysLeft(item);
         const timing = days ? `${days} ${days === 1 ? 'day' : 'days'} until review` : 'Ready for review';
@@ -175,7 +187,7 @@ export function ArchiveScreen({ revision, scanning, changed }: { revision: numbe
           </View>)}
           {review.some((item) => !item.canDelete) && <Body>An original is unavailable or can only be managed in its source app.</Body>}
           {scanning && <Body>Finish or cancel the active scan before requesting deletion.</Body>}
-          <Button label="Permanently delete originals" disabled={busy || scanning || review.some((item) => !item.canDelete)} run={deleteConfirmed} />
+          <Button label="Permanently delete originals" destructive disabled={busy || scanning || review.some((item) => !item.canDelete)} run={deleteConfirmed} />
           <Button label="Back to archive" subtle disabled={busy} run={() => setReview([])} />
         </ScrollView>
       </SafeAreaView>
@@ -186,16 +198,16 @@ export function ArchiveScreen({ revision, scanning, changed }: { revision: numbe
 const layout = StyleSheet.create({
   fill: { flex: 1 },
   shell: { flex: 1, backgroundColor: color.paper },
-  header: { gap: 11, paddingBottom: 7 },
-  notice: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: color.white, borderRadius: 17, padding: 11 },
-  noticeIcon: { width: 39, height: 39, borderRadius: 13, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
-  album: { gap: 3, paddingBottom: 10 },
+  header: { gap: 12, paddingBottom: 8 },
+  notice: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: color.white, borderRadius: 16, padding: 12 },
+  noticeIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
+  album: { gap: 4, paddingBottom: 12 },
   timing: { color: color.ink, fontSize: 13, fontWeight: '600', marginTop: 2 },
   ready: { color: color.blue },
   caption: { color: color.muted, fontSize: 12 },
   selection: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   description: { flex: 1, gap: 3 },
   thumb: { height: 64, width: 64, borderRadius: 10 },
-  name: { color: color.ink, fontWeight: '700', fontSize: 14 },
-  bar: { paddingHorizontal: 20, paddingVertical: 9, backgroundColor: color.black, gap: 6 },
+  name: { color: color.ink, fontWeight: '600', fontSize: 14 },
+  bar: { paddingHorizontal: 20, paddingVertical: 8, backgroundColor: color.paper, gap: 8 },
 });

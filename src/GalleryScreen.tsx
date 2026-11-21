@@ -5,10 +5,10 @@ import { ImageViewer } from './ImageViewer';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
 import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, Icon, styles } from './ui';
 
-export function GalleryScreen({ access, albums, loading, error, album, open, manage, settings, pick, scan, revision, revisit }: {
+export function GalleryScreen({ access, albums, loading, error, album, open, manage, settings, pick, scan, revision }: {
   access: Access; albums: Album[]; loading: boolean; error: string; album: Album | 'recent' | null;
   open: (album: Album | 'recent' | null) => void; manage: () => void; settings: () => void; pick: () => void;
-  scan: (albums: string[], uris: string[]) => void; revision: number; revisit: () => void;
+  scan: (albums: string[], uris: string[]) => void; revision: number;
 }) {
   const [selectedAlbums, setSelectedAlbums] = useState(new Set<string>());
   const [selectedPhotos, setSelectedPhotos] = useState(new Set<string>());
@@ -65,7 +65,7 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
 
   const available = access !== 'none';
   const screenshotAlbum = albums.find((item) => /^screenshots?$/i.test(item.name));
-  const scopeName = album === 'recent' ? 'Recent photos' : album?.name ?? 'Gallery';
+  const scopeName = album === 'recent' ? 'Recent photos' : album?.name ?? 'Phone albums';
   const scopedCount = album && album !== 'recent' ? album.count : albums.reduce((total, item) => total + item.count, 0);
 
   function toggle(setter: (update: (current: Set<string>) => Set<string>) => void, key: string) {
@@ -86,7 +86,7 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
 
   const header = <View style={layout.header}>
     {album && <Pressable accessibilityRole="button" onPress={() => open(null)} style={styles.textAction}>
-      <Icon name="back" tint={color.blue} size={17} /><Text style={styles.link}>All albums</Text>
+      <Icon name="back" tint={color.blue} size={20} /><Text style={styles.link}>All albums</Text>
     </Pressable>}
     <View style={styles.between}>
       <View style={layout.title}><Heading large>{scopeName}</Heading>
@@ -95,11 +95,11 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
       {available && scopedCount > 0 && <Chip label={selecting ? 'Done' : 'Select'} selected={selecting}
         run={() => selecting ? resetSelection() : setSelecting(true)} />}
     </View>
-    {access === 'limited' && <Body>Showing the photos you shared with Android.</Body>}
+    {!album && <Body>Choose device photos to scan in Nimby</Body>}
+    {access === 'limited' && <Body>Only photos you shared with Nimby are shown</Body>}
     {available && !album && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={layout.filters}>
       <Chip label="Recent photos" run={() => open('recent')} />
       {screenshotAlbum && <Chip label="Screenshots" run={() => open(screenshotAlbum)} />}
-      <Chip label="Worth Revisiting" run={revisit} />
     </ScrollView>}
     {available && (access === 'limited' || !album) && <View style={styles.row}>
       {access === 'limited' && <Chip label="Change shared photos" run={manage} />}
@@ -107,8 +107,8 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
     </View>}
     {available && !selecting && scopedCount > 0 &&
       <Pressable accessibilityRole="button" onPress={() => scan(albumId ? [albumId] : [], [])} style={styles.textAction}>
-        <Icon name="scan" tint={color.blue} size={17} />
-        <Text style={styles.link}>{albumId ? 'Scan this album' : 'Scan Gallery'}</Text>
+        <Icon name="scan" tint={color.blue} size={20} />
+        <Text style={styles.link}>{albumId ? 'Scan this album' : 'Scan all accessible photos'}</Text>
       </Pressable>}
     {!!error && <ErrorText>{error}</ErrorText>}
     {!!photoError && <ErrorText>{photoError}</ErrorText>}
@@ -118,9 +118,8 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
     {!album || !available ? <PhotoGrid<Album> desired={2} data={available ? albums : []}
       keyExtractor={(item) => item.id} extraData={[selecting, selectedAlbums]} ListHeaderComponent={header}
       ListEmptyComponent={loading ? <ActivityIndicator color={color.blue} /> : !available
-        ? <EmptyState icon="gallery" title="Bring your gallery into view" text="Share photos to browse albums, or pick a few to get started."
-            action={<View style={styles.row}><Button label="Allow photo access" run={manage} /><Button label="Select Photos" subtle run={pick} />
-              <Button label="Worth Revisiting" subtle run={revisit} /></View>} />
+        ? <EmptyState icon="gallery" title="Allow access to phone albums" text="Allow album access or pick individual photos."
+            action={<View style={styles.row}><Button label="Allow photo access" run={manage} /><Button label="Pick photos" subtle run={pick} /></View>} />
         : !error ? <EmptyState icon="gallery" title="No albums here yet" text="Accessible photo albums will appear here." /> : undefined}
       renderTile={(item) => <View style={layout.album}>
         <PhotoTile uri={item.uri} label={`${item.name}, ${item.count} photos`} ratio={1.23}
@@ -159,11 +158,11 @@ export function GalleryScreen({ access, albums, loading, error, album, open, man
 
 const layout = StyleSheet.create({
   fill: { flex: 1 },
-  header: { gap: 10, paddingBottom: 7 },
-  title: { flex: 1, gap: 3 },
-  filters: { gap: 7 },
+  header: { gap: 12, paddingBottom: 8 },
+  title: { flex: 1, gap: 4 },
+  filters: { gap: 8 },
   album: { paddingBottom: 12, gap: 2 },
-  albumName: { fontSize: 15, fontWeight: '700', color: color.ink, marginTop: 4 },
+  albumName: { fontSize: 15, fontWeight: '600', color: color.ink, marginTop: 4 },
   count: { fontSize: 12, color: color.muted },
-  actions: { paddingHorizontal: 20, paddingVertical: 9, backgroundColor: color.black, gap: 7 },
+  actions: { paddingHorizontal: 20, paddingVertical: 8, backgroundColor: color.paper, gap: 8 },
 });

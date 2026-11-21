@@ -185,6 +185,10 @@ class GalleryModule : Module() {
             withContext(Dispatchers.IO) { memory.reviewCategories(scanId?.toLong()) }
         }
 
+        AsyncFunction("revisitPicks") Coroutine { seen: List<String> ->
+            withContext(Dispatchers.IO) { memory.revisitPicks(seen) }
+        }
+
         AsyncFunction("scanFeed") Coroutine { scanId: String, category: String?, offset: Int, limit: Int ->
             withContext(Dispatchers.IO) { memory.scanFeed(scanId.toLong(), category, offset.coerceAtLeast(0), limit.coerceIn(1, 48)) }
         }

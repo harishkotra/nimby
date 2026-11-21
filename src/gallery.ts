@@ -98,6 +98,7 @@ type GalleryModule = {
   markReviewed(uris: string[]): Promise<void>;
   feed(mode: Feed, group: string | null, offset: number, limit: number): Promise<Result[]>;
   reviewCategories(scanId: string | null): Promise<ReviewCategory[]>;
+  revisitPicks(seen: string[]): Promise<Result[]>;
   scanFeed(scanId: string, category: string | null, offset: number, limit: number): Promise<Result[]>;
   groups(kept: boolean): Promise<string[]>;
   decide(id: string, decision: Decision, collection: string | null): Promise<void>;

@@ -702,6 +702,39 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         } }
     }
 
+    fun revisitPicks(seen: List<String>): List<Map<String, Any?>> {
+        val db = readableDatabase
+        val excluded = seen.takeLast(96).distinct().toTypedArray()
+        val filter = if (excluded.isEmpty()) "" else "AND id NOT IN (${excluded.joinToString(",") { "?" }})"
+        val eligible = """FROM images WHERE status = 'complete' AND decision = 'new'
+            AND category IS NOT NULL AND $visible $filter""".trimIndent()
+        // Specific references lead. Each category, including generic screenshots, gets at most one slot.
+        val categories = db.rawQuery("""SELECT category $eligible GROUP BY category
+            ORDER BY CASE WHEN category = 'Screenshots' THEN 1 ELSE 0 END, MAX(analyzed) DESC, category""", excluded
+        ).use { row -> buildList { while (row.moveToNext()) add(row.getString(0)) } }
+        val picks = mutableListOf<Map<String, Any?>>()
+        val ids = mutableListOf<Long>()
+        for (category in categories) {
+            if (picks.size == 3) break
+            db.rawQuery("""SELECT id, kind, confidence, tags, category, decision, collection $eligible AND category = ?
+                ORDER BY low_quality, analyzed DESC, id DESC LIMIT 24""", arrayOf(*excluded, category)).use { row ->
+                while (row.moveToNext()) {
+                    val id = row.getLong(0)
+                    if (ids.any { picked -> db.rawQuery(
+                            "SELECT 1 FROM near_matches WHERE left_id = ? AND right_id = ?",
+                            arrayOf(minOf(id, picked).toString(), maxOf(id, picked).toString())
+                        ).use { it.moveToFirst() } }) continue
+                    val photo = primarySource(id) ?: continue
+                    picks.add(entry(id, row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) },
+                        row.getString(3), category, row.getString(5), row.getString(6), photo))
+                    ids.add(id)
+                    break
+                }
+            }
+        }
+        return picks
+    }
+
     fun feed(mode: String, category: String?, offset: Int, limit: Int): List<Map<String, Any?>> {
         val selection = mutableListOf("status = 'complete'", visible)
         val args = mutableListOf<String>()

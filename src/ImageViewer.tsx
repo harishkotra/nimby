@@ -3,17 +3,20 @@ import { Keyboard, LayoutAnimation, Modal, Pressable, ScrollView, StyleSheet, Te
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { color, Icon, IconButton, styles, Thumbnail, useReducedMotion } from './ui';
 
-export function ImageViewer({ uri, label, album, close, children, summary = 'Photo details' }: {
+export function ImageViewer({ uri, label, album, close, children, footer, summary = 'Photo details' }: {
   uri: string | null; label: string; album?: string | null; close: () => void; children?: ReactNode; summary?: string;
+  footer?: (openDetails: () => void) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   const reduced = useReducedMotion();
 
-  function toggle() {
-    if (expanded) Keyboard.dismiss();
+  function changeExpanded(next: boolean) {
+    if (next === expanded) return;
+    if (!next) Keyboard.dismiss();
     if (!reduced) LayoutAnimation.configureNext(LayoutAnimation.create(180, LayoutAnimation.Types.easeOut, LayoutAnimation.Properties.opacity));
-    setExpanded(!expanded);
+    setExpanded(next);
   }
+  const toggle = () => changeExpanded(!expanded);
 
   return <Modal visible hardwareAccelerated statusBarTranslucent navigationBarTranslucent
     animationType={reduced ? 'none' : 'fade'} onRequestClose={expanded ? toggle : close}>
@@ -32,13 +35,13 @@ export function ImageViewer({ uri, label, album, close, children, summary = 'Pho
           style={({ pressed }) => [layout.handle, pressed && styles.faded]}>
           <View style={layout.grabber} />
           <View style={layout.handleRow}>
-            <View style={layout.handleIcon}><Icon name="info" size={20} tint={color.deep} /></View>
             <Text style={layout.handleLabel}>{summary}</Text>
-            <Icon name={expanded ? 'down' : 'up'} size={17} tint={color.muted} />
+            <Icon name={expanded ? 'down' : 'up'} size={18} tint={color.muted} />
           </View>
         </Pressable>
         {expanded && <ScrollView keyboardShouldPersistTaps="handled" nestedScrollEnabled bounces={false}
           contentContainerStyle={layout.contents}>{children}</ScrollView>}
+        {footer && <View style={layout.footer}>{footer(() => changeExpanded(true))}</View>}
       </View>
     </SafeAreaView>
   </Modal>;
@@ -46,19 +49,19 @@ export function ImageViewer({ uri, label, album, close, children, summary = 'Pho
 
 const layout = StyleSheet.create({
   shell: { flex: 1, backgroundColor: color.black },
-  toolbar: { paddingHorizontal: 12, minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 7 },
+  toolbar: { paddingHorizontal: 12, minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 8 },
   close: { backgroundColor: color.white },
   album: { flex: 1, color: color.muted, fontSize: 13, textAlign: 'center' },
   toolbarSpacer: { width: 48 },
   media: { flex: 1, justifyContent: 'center' },
   image: { flex: 1, backgroundColor: color.black },
   scrim: { ...StyleSheet.absoluteFill, top: 56, backgroundColor: '#00000050' },
-  sheet: { backgroundColor: color.white, borderTopLeftRadius: 24, borderTopRightRadius: 24 },
+  sheet: { backgroundColor: color.white, borderTopLeftRadius: 20, borderTopRightRadius: 20 },
   expanded: { maxHeight: '79%' },
-  handle: { flexShrink: 0, paddingHorizontal: 18, paddingTop: 9, paddingBottom: 9, gap: 7 },
+  handle: { flexShrink: 0, paddingHorizontal: 20, paddingTop: 8, paddingBottom: 8, gap: 4 },
   grabber: { alignSelf: 'center', backgroundColor: color.rule, width: 28, height: 4, borderRadius: 3 },
-  handleRow: { minHeight: 42, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  handleIcon: { backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 12 },
-  handleLabel: { flex: 1, color: color.ink, fontSize: 16, fontWeight: '700' },
-  contents: { paddingHorizontal: 18, paddingTop: 5, paddingBottom: 26, gap: 15 },
+  handleRow: { minHeight: 36, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  handleLabel: { flex: 1, color: color.ink, fontSize: 16, fontWeight: '600' },
+  contents: { paddingHorizontal: 20, paddingTop: 4, paddingBottom: 20, gap: 16 },
+  footer: { flexShrink: 0, paddingHorizontal: 20, paddingVertical: 12, borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
 });

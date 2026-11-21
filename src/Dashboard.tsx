@@ -14,7 +14,7 @@ type Links = { gallery: () => void; duplicates: () => void; archive: () => void;
 function Action({ label, value, icon, run }: { label: string; value?: string; icon: IconName; run: () => void }) {
   return <Pressable accessibilityRole="button" onPress={run}
     style={({ pressed }) => [layout.action, pressed && styles.faded]}>
-    <View style={layout.actionIcon}><Icon name={icon} size={19} tint={color.blue} /></View>
+    <View style={layout.actionIcon}><Icon name={icon} size={20} tint={color.blue} /></View>
     <View style={layout.actionText}><Text style={layout.actionName}>{label}</Text>{value && <Body>{value}</Body>}</View>
     <Icon name="chevron" size={16} tint={color.muted} />
   </Pressable>;
@@ -64,7 +64,7 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
     <View style={layout.scanGroup}>
       <Button label="Scan gallery" icon="scan" run={scan} disabled={busy} />
       <View style={layout.halves}>
-        <Button label="Browse albums" subtle disabled={busy} run={links.gallery} style={layout.flex} />
+        <Button label="Phone albums" subtle disabled={busy} run={links.gallery} style={layout.flex} />
         <Button label="Pick photos" subtle disabled={busy} run={pick} style={layout.flex} />
       </View>
     </View>
@@ -87,7 +87,7 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
     </View>
     <View style={layout.section}>
       <Heading>Review photos</Heading>
-      <Action icon="bookmark" label="Worth revisiting" value={data ? `${count(data.worth)} suggestions by category` : undefined}
+      <Action icon="bookmark" label="Worth revisiting" value="A short list of saved references"
         run={() => links.discover('suggestions')} />
       <Action icon="layers" label="Duplicates" value={data ? `${count(data.duplicateGroups)} groups to review` : undefined} run={links.duplicates} />
     </View>
@@ -174,33 +174,33 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
 }
 
 const layout = StyleSheet.create({
-  intro: { gap: 5 },
+  intro: { gap: 4 },
   caption: { color: color.muted, fontSize: 13, fontWeight: '500' },
   scanGroup: { gap: 8 },
   halves: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   flex: { flex: 1 },
-  section: { gap: 7 },
-  preview: { flexDirection: 'row', gap: 7 },
+  section: { gap: 8 },
+  preview: { flexDirection: 'row', gap: 8 },
   previewTile: { flex: 1, maxWidth: '45%' },
-  action: { minHeight: 54, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  actionIcon: { width: 39, height: 39, borderRadius: 13, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
+  action: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  actionIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
   actionText: { flex: 1, gap: 2 },
   actionName: { color: color.ink, fontWeight: '600', fontSize: 15, flexShrink: 1 },
-  coverage: { alignItems: 'center', justifyContent: 'center', paddingVertical: 18, gap: 7 },
+  coverage: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8 },
   ring: { overflow: 'hidden', backgroundColor: color.tint, marginBottom: 10 },
   ringCenter: { position: 'absolute', backgroundColor: color.paper, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, gap: 0 },
-  ringValue: { color: color.ink, fontWeight: '700', letterSpacing: -1.6, fontVariant: ['tabular-nums'], maxWidth: '100%' },
-  chartTitle: { color: color.ink, fontSize: 20, fontWeight: '700', textAlign: 'center' },
-  insetLabel: { color: color.blue, fontSize: 13, fontWeight: '700', backgroundColor: color.tint, borderRadius: 20, paddingHorizontal: 12, paddingVertical: 7 },
+  ringValue: { color: color.ink, fontWeight: '600', letterSpacing: -1.6, fontVariant: ['tabular-nums'], maxWidth: '100%' },
+  chartTitle: { color: color.ink, fontSize: 20, fontWeight: '600', textAlign: 'center' },
+  insetLabel: { color: color.blue, fontSize: 13, fontWeight: '600', paddingVertical: 8 },
   stack: { flexDirection: 'row', height: 14, borderRadius: 10, overflow: 'hidden', gap: 2, marginTop: 7, marginBottom: 8 },
   legend: { flexDirection: 'row', flexWrap: 'wrap', gap: 2, paddingBottom: 7 },
   legendItem: { minHeight: 48, flexDirection: 'row', gap: 5, alignItems: 'center', paddingRight: 12, maxWidth: '100%' },
   dot: { width: 8, height: 8, borderRadius: 4 },
   legendText: { fontSize: 13, color: color.ink, flexShrink: 1 },
   legendCount: { color: color.muted, fontSize: 13, fontVariant: ['tabular-nums'] },
-  storage: { padding: 15, gap: 10, borderRadius: 20, backgroundColor: color.white },
-  saving: { color: color.blue, fontSize: 28, fontWeight: '700', fontVariant: ['tabular-nums'], letterSpacing: -1 },
-  storageAction: { minHeight: 49, paddingVertical: 5, justifyContent: 'center', gap: 7 },
+  storage: { padding: 16, gap: 12, borderRadius: 16, backgroundColor: color.white },
+  saving: { color: color.blue, fontSize: 28, fontWeight: '600', fontVariant: ['tabular-nums'], letterSpacing: -1 },
+  storageAction: { minHeight: 49, paddingVertical: 5, justifyContent: 'center', gap: 8 },
   track: { height: 6, borderRadius: 8, overflow: 'hidden', backgroundColor: color.rule },
   fill: { height: '100%', borderRadius: 8 },
   details: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingBottom: 6 },

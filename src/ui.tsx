@@ -5,9 +5,9 @@ import {
 } from 'react-native';
 
 export const color = {
-  paper: '#101514', white: '#19211F', ink: '#EFF5F1', muted: '#A0B2A9', rule: '#2F3C36',
-  blue: '#A4E3C3', tint: '#24392F', lightText: '#CFDFD5', deep: '#C5EBD8', danger: '#FFADAA',
-  black: '#0A0E0D', amber: '#E2C291',
+  paper: '#151716', white: '#202321', ink: '#F2F4F1', muted: '#A6ADA8', rule: '#393E3A',
+  blue: '#B6E4C9', tint: '#2B3730', lightText: '#D5DBD6', deep: '#D5DBD6', danger: '#FFB4AB',
+  black: '#101211', amber: '#E2C291',
 };
 
 const icons = {
@@ -23,7 +23,6 @@ const icons = {
   close: require('./assets/icons/close.png'),
   check: require('./assets/icons/check.png'),
   back: require('./assets/icons/back.png'),
-  spark: require('./assets/icons/spark.png'),
   external: require('./assets/icons/external.png'),
   info: require('./assets/icons/info.png'),
   clock: require('./assets/icons/clock.png'),
@@ -34,7 +33,7 @@ const icons = {
 
 export type IconName = keyof typeof icons;
 
-export function Icon({ name, size = 21, tint = color.ink }: { name: IconName; size?: number; tint?: string }) {
+export function Icon({ name, size = 20, tint = color.ink }: { name: IconName; size?: number; tint?: string }) {
   return <Image source={icons[name]} accessible={false} fadeDuration={0}
     style={{ width: size, height: size, tintColor: tint }} />;
 }
@@ -48,12 +47,12 @@ export function IconButton({ icon, label, run, style }: {
   </Pressable>;
 }
 
-export function Button({ label, run, subtle, disabled, style, icon }: {
-  label: string; run: () => void; subtle?: boolean; disabled?: boolean; style?: StyleProp<ViewStyle>; icon?: IconName;
+export function Button({ label, run, subtle, disabled, style, icon, destructive }: {
+  label: string; run: () => void; subtle?: boolean; disabled?: boolean; style?: StyleProp<ViewStyle>; icon?: IconName; destructive?: boolean;
 }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={run}
-    style={({ pressed }) => [styles.button, subtle && styles.subtle, (pressed || disabled) && styles.faded, style]}>
-    {icon && <Icon name={icon} size={19} tint={subtle ? color.deep : color.paper} />}
+    style={({ pressed }) => [styles.button, subtle && styles.subtle, destructive && styles.destructive, (pressed || disabled) && styles.faded, style]}>
+    {icon && <Icon name={icon} size={20} tint={subtle ? color.deep : color.paper} />}
     <Text style={[styles.buttonText, subtle && styles.subtleText]}>{label}</Text>
   </Pressable>;
 }
@@ -107,7 +106,7 @@ export function EmptyState({ icon, title, text, action }: {
   icon: IconName; title: string; text: string; action?: ReactNode;
 }) {
   return <View style={styles.empty}>
-    <View style={styles.emptyIcon}><Icon name={icon} size={23} tint={color.blue} /></View>
+    <View style={styles.emptyIcon}><Icon name={icon} size={20} tint={color.blue} /></View>
     <Text style={styles.emptyTitle}>{title}</Text>
     <Text style={[styles.body, styles.centered]}>{text}</Text>
     {action}
@@ -136,23 +135,24 @@ export const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
   between: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   column: { gap: 12 },
-  content: { paddingHorizontal: 20, paddingTop: 14, paddingBottom: 32, gap: 22 },
-  button: { backgroundColor: color.blue, borderRadius: 16, minHeight: 48, paddingHorizontal: 15,
-    paddingVertical: 11, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-  buttonText: { flexShrink: 1, fontWeight: '700', fontSize: 14, textAlign: 'center', color: color.paper },
-  subtle: { backgroundColor: color.tint },
+  content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32, gap: 24 },
+  button: { backgroundColor: color.ink, borderRadius: 12, minHeight: 48, paddingHorizontal: 16,
+    paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
+  buttonText: { flexShrink: 1, fontWeight: '600', fontSize: 14, textAlign: 'center', color: color.paper },
+  subtle: { backgroundColor: color.white, borderWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
+  destructive: { backgroundColor: color.danger },
   subtleText: { color: color.deep },
   faded: { opacity: 0.66 },
-  iconButton: { height: 48, width: 48, borderRadius: 24, backgroundColor: color.white, alignItems: 'center', justifyContent: 'center' },
-  chip: { backgroundColor: color.white, borderRadius: 24, minHeight: 48, justifyContent: 'center', paddingHorizontal: 15 },
+  iconButton: { height: 48, width: 48, borderRadius: 12, backgroundColor: color.white, alignItems: 'center', justifyContent: 'center' },
+  chip: { backgroundColor: color.white, borderRadius: 12, minHeight: 48, justifyContent: 'center', paddingHorizontal: 16 },
   selected: { backgroundColor: color.blue },
   selectedText: { color: color.paper },
   chipText: { color: color.ink, fontWeight: '600', fontSize: 13 },
-  heading: { fontFamily: 'sans-serif-medium', color: color.ink, fontSize: 23, letterSpacing: -0.5 },
-  largeHeading: { fontSize: 36, lineHeight: 40, letterSpacing: -1.3 },
+  heading: { fontFamily: 'sans-serif-medium', color: color.ink, fontSize: 22, letterSpacing: -0.3 },
+  largeHeading: { fontSize: 34, lineHeight: 40, letterSpacing: -1 },
   body: { color: color.muted, fontSize: 14, lineHeight: 21 },
   error: { color: color.danger, fontSize: 14, lineHeight: 20 },
-  link: { color: color.blue, fontSize: 13, fontWeight: '700', flexShrink: 1 },
+  link: { color: color.blue, fontSize: 14, fontWeight: '600', flexShrink: 1 },
   textAction: { minHeight: 48, flexDirection: 'row', alignItems: 'center', gap: 4, flexShrink: 1 },
   imageContainer: { backgroundColor: color.white, overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   unavailable: { alignItems: 'center', justifyContent: 'center', gap: 6, padding: 4 },
