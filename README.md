@@ -10,6 +10,7 @@ Nimby is an Android photo review app that helps you rediscover useful things you
 - Open the results from a specific scan, including photos whose analysis was reused. Results are grouped by recognized reference category or image type, with real thumbnail previews.
 - Open Worth revisiting to browse reference categories and select photos in batches. Keep, dismiss, or organize a photo into a collection.
 - Review exact file copies and visually similar photos, with a suggested keeper for each duplicate group.
+- Tap duplicate thumbnails or select alternatives together to archive a batch. Change the keeper before confirming if you want to retain a different photo.
 - See scan history, gallery coverage, and estimated storage impact.
 - Check the Eye runtime in Settings with a bundled self-test, measured inference time, and diagnostics.
 

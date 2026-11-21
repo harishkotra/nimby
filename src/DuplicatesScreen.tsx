@@ -1,52 +1,83 @@
 import { useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { confirmArchive } from './ArchiveScreen';
-import { native, type DuplicateGroup } from './gallery';
-import { Body, Button, color, ErrorText, formatBytes, Heading, percent, styles, Thumbnail } from './ui';
+import { ImageViewer } from './ImageViewer';
+import { PhotoTile } from './PhotoGrid';
+import { native, type DuplicateGroup, type DuplicatePhoto } from './gallery';
+import { Body, Button, color, ErrorText, formatBytes, Heading, percent, styles } from './ui';
+
+const maxArchiveSelection = 200;
 
 function Group({ group, changed }: { group: DuplicateGroup; changed: () => void }) {
   const [keeper, setKeeper] = useState(group.photos[0]?.uri);
   const [selected, setSelected] = useState(new Set<string>());
+  const [choosingKeeper, setChoosingKeeper] = useState(false);
+  const [preview, setPreview] = useState<DuplicatePhoto | null>(null);
   const recommended = group.photos[0];
   const kept = group.photos.find((photo) => photo.uri === keeper) ?? recommended;
+  const alternatives = group.photos.filter((photo) => photo.uri !== kept.uri);
+  const selectable = alternatives.slice(0, maxArchiveSelection);
+  const allSelected = selectable.length === selected.size && selectable.every((photo) => selected.has(photo.uri));
 
-  function selectKeeper(uri: string) {
-    setKeeper(uri);
-    setSelected((current) => new Set([...current].filter((item) => item !== uri)));
-  }
-
-  function toggle(uri: string) {
+  function tap(photo: DuplicatePhoto) {
+    if (choosingKeeper) {
+      setKeeper(photo.uri);
+      setSelected((current) => new Set([...current].filter((uri) => uri !== photo.uri)));
+      setChoosingKeeper(false);
+      return;
+    }
+    if (photo.uri === kept.uri) {
+      setPreview(photo);
+      return;
+    }
     setSelected((current) => {
       const next = new Set(current);
-      if (next.has(uri)) next.delete(uri);
-      else if (next.size < 200) next.add(uri);
+      if (next.has(photo.uri)) next.delete(photo.uri);
+      else if (next.size < maxArchiveSelection) next.add(photo.uri);
       return next;
     });
   }
 
   return <View style={layout.group}>
-    <Heading>{group.similarity == null ? 'Exact copies' : 'Visual matches'}</Heading>
-    <Body>{group.similarity == null ? 'These originals have identical file contents.'
-      : 'Eye linked visually similar images in this group. Review each photo before choosing.'}</Body>
-    <FlatList horizontal data={group.photos} extraData={[keeper, selected]} keyExtractor={(photo) => photo.uri} contentContainerStyle={layout.strip}
-      renderItem={({ item: photo }) => <View style={layout.tile}>
-        <Pressable accessibilityRole="radio" accessibilityLabel={`Retain ${photo.name}`}
-          accessibilityState={{ checked: kept.uri === photo.uri }} onPress={() => selectKeeper(photo.uri)}
-          style={[layout.photo, kept.uri === photo.uri && layout.chosen]}>
-          <Thumbnail uri={photo.uri} style={layout.image} />
-          <Text style={layout.name} numberOfLines={2}>{photo.name}</Text>
-          <Body>{photo.album} · {photo.bytes ? formatBytes(photo.bytes) : 'Size unavailable'}</Body>
-          {photo.uri === recommended.uri && <Text style={layout.accent}>Recommended keeper</Text>}
-          {photo.uri === kept.uri && <Text style={layout.accent}>Keep this file</Text>}
-          {photo.uri !== kept.uri && <Body>{photo.imageId === kept.imageId ? 'Exact copy of keeper' : 'Visual group member'}</Body>}
-          {photo.keeper != null && <Body>Eye keeper score {percent(photo.keeper)}</Body>}
-          {photo.aesthetic != null && <Body>Eye aesthetic score {percent(photo.aesthetic)}</Body>}
-        </Pressable>
-        {photo.uri !== kept.uri && <Button subtle label={selected.has(photo.uri) ? 'Selected' : 'Select to archive'}
-          run={() => toggle(photo.uri)} />}
-      </View>} />
-    <Button label={selected.size ? `Archive ${selected.size} selected` : 'Select alternatives to archive'}
-      disabled={!selected.size} run={() => confirmArchive([...selected], changed)} />
+    <View style={styles.between}>
+      <Heading>{group.similarity == null ? 'Exact copies' : 'Visual matches'}</Heading>
+      <Body>{group.photos.length.toLocaleString()} photos</Body>
+    </View>
+    <Body>{choosingKeeper ? 'Tap the photo you want to keep.' : 'Tap photos to select them for the archive. Hold to preview.'}</Body>
+    <FlatList horizontal data={group.photos} extraData={[keeper, selected, choosingKeeper]}
+      keyExtractor={(photo) => photo.uri} contentContainerStyle={layout.strip} showsHorizontalScrollIndicator={false}
+      renderItem={({ item: photo }) => {
+        const isKeeper = photo.uri === kept.uri;
+        return <View style={layout.tile}>
+          <PhotoTile uri={photo.uri} label={`${photo.name}${isKeeper ? ', keeper' : ''}`}
+            selected={choosingKeeper ? isKeeper : isKeeper ? undefined : selected.has(photo.uri)}
+            press={() => tap(photo)} longPress={() => setPreview(photo)} />
+          <Text style={[layout.caption, isKeeper && layout.accent]} numberOfLines={1}>
+            {isKeeper ? 'Keeping' : photo.uri === recommended.uri ? 'Recommended' : photo.album || 'Gallery'}
+          </Text>
+          {photo.keeper != null && <Body>{percent(photo.keeper)} keeper score</Body>}
+        </View>;
+      }} />
+    <View style={styles.row}>
+      <Pressable accessibilityRole="button" accessibilityState={{ selected: choosingKeeper }}
+        style={styles.textAction} onPress={() => setChoosingKeeper(!choosingKeeper)}>
+        <Text style={styles.link}>{choosingKeeper ? 'Cancel' : 'Change keeper'}</Text>
+      </Pressable>
+      {!choosingKeeper && <Pressable accessibilityRole="button" style={styles.textAction}
+        onPress={() => setSelected(allSelected ? new Set() : new Set(selectable.map((photo) => photo.uri)))}>
+        <Text style={styles.link}>{allSelected ? 'Clear selection' : alternatives.length > maxArchiveSelection
+          ? `Select first ${maxArchiveSelection}` : 'Select alternatives'}</Text>
+      </Pressable>}
+    </View>
+    {selected.size > 0 && !choosingKeeper && <Button icon="archive" label={`Archive ${selected.size.toLocaleString()}`}
+      run={() => confirmArchive([...selected], changed)} />}
+    {preview && <ImageViewer uri={preview.uri} label={preview.name} album={preview.album} close={() => setPreview(null)}>
+      <Heading>{preview.name}</Heading>
+      <Body>{preview.album} · {preview.bytes ? formatBytes(preview.bytes) : 'Size unavailable'}</Body>
+      {preview.uri === recommended.uri && <Body>Recommended keeper</Body>}
+      {preview.aesthetic != null && <Body>{percent(preview.aesthetic)} Eye aesthetic score</Body>}
+      {preview.keeper != null && <Body>{percent(preview.keeper)} Eye keeper score</Body>}
+    </ImageViewer>}
   </View>;
 }
 
@@ -87,7 +118,7 @@ export function DuplicatesScreen({ revision, changed }: { revision: number; chan
     onEndReachedThreshold={0.5} onEndReached={() => { if (more && status === 'ready') void load(groups.length); }}
     ListHeaderComponent={<View style={styles.column}>
       <Heading large>Review duplicates</Heading>
-      <Body>Choose the original you want to retain, then select any alternatives to archive.</Body>
+      <Body>Nimby suggests one keeper per group. You choose what to archive.</Body>
       {status === 'loading' && <Body>Checking indexed photos…</Body>}
       {status === 'error' && <ErrorText>Duplicate review could not be loaded.</ErrorText>}
     </View>}
@@ -96,12 +127,9 @@ export function DuplicatesScreen({ revision, changed }: { revision: number; chan
 }
 
 const layout = StyleSheet.create({
-  group: { paddingBottom: 16, borderBottomWidth: 1, borderColor: color.rule, gap: 12 },
-  strip: { gap: 10 },
-  tile: { width: 169, gap: 8 },
-  photo: { backgroundColor: color.white, borderRadius: 14, borderWidth: 1, borderColor: color.rule, padding: 8, gap: 4 },
-  chosen: { borderColor: color.blue },
-  image: { height: 124, borderRadius: 9 },
-  accent: { color: color.blue, fontSize: 13, fontWeight: '700' },
-  name: { color: color.ink, fontWeight: '700' },
+  group: { paddingBottom: 16, borderBottomWidth: StyleSheet.hairlineWidth, borderColor: color.rule, gap: 8 },
+  strip: { gap: 8 },
+  tile: { width: 140, gap: 4 },
+  caption: { color: color.ink, fontWeight: '500', fontSize: 14 },
+  accent: { color: color.blue, fontWeight: '600' },
 });
