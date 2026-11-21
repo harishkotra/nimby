@@ -2,6 +2,11 @@ const { withAndroidManifest, withAppBuildGradle, withGradleProperties } = requir
 
 const withPhotoPermissions = (config) => withAndroidManifest(config, (result) => {
   const manifest = result.modResults.manifest;
+  // Voice requires API 26. Nimby keeps its other features available on API 24 and 25.
+  const sdk = (manifest['uses-sdk'] ??= [{ $: {} }])[0];
+  sdk.$ ??= {};
+  const overrides = (sdk.$['tools:overrideLibrary'] ?? '').split(',').filter(Boolean);
+  sdk.$['tools:overrideLibrary'] = [...new Set([...overrides, 'ai.moonshine.voice'])].join(',');
   if (manifest.application?.[0]) {
     delete manifest.application[0].$['android:requestLegacyExternalStorage'];
   }
@@ -20,6 +25,10 @@ const withEyeCpuRuntime = (config) => withAppBuildGradle(config, (result) => {
   const exclusions = "android.packagingOptions.jniLibs.excludes.addAll(['**/libLiteRtGpuAccelerator.so', '**/libLiteRtClGlAccelerator.so'])";
   if (!result.modResults.contents.includes(exclusions)) {
     result.modResults.contents += `\n// Eye 4.3 falls back to CPU when its OpenCL accelerator is absent.\n${exclusions}\n`;
+  }
+  const localMap = "android.androidResources.noCompress.add('pmtiles')";
+  if (!result.modResults.contents.includes("noCompress += ['pmtiles']") && !result.modResults.contents.includes(localMap)) {
+    result.modResults.contents += `\n${localMap}\n`;
   }
   return result;
 });

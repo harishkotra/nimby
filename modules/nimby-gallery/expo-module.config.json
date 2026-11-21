@@ -1,1 +1,1 @@
-{ "platforms": ["android"], "android": { "modules": ["dev.nimby.gallery.GalleryModule"] } }
+{ "platforms": ["android"], "android": { "modules": ["dev.nimby.gallery.GalleryModule", "dev.nimby.gallery.PhotoMapModule"] } }

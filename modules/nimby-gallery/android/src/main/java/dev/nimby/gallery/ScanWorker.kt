@@ -214,9 +214,10 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
     }
 
     @Synchronized
-    fun clearAnalysis(all: Boolean) {
+    fun clearAnalysis(all: Boolean, beforeReset: () -> Unit) {
         check(task?.isCompleted != false && eyeCheck.phase != "running") { "Finish the scan or model check first." }
         metadataTask?.cancel()
+        if (all) beforeReset()
         memory.clearAnalysis(all)
     }
 

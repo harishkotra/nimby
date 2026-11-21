@@ -95,7 +95,7 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
   function confirmClear(all: boolean) {
     const label = all ? 'Delete analysis metadata' : 'Clear analysis cache';
     show({ title: label, message: all
-      ? 'Remove the photo index, scan history, and photo decisions from Nimby. Your original photos and archive records stay in place.'
+      ? 'Remove the photo index, scan history, photo decisions, timeline edits, and saved feedback. Original photos and archive records stay in place.'
       : 'Remove cached Eye results and embeddings. Photo decisions, scan history, and your originals stay in place.',
       action: { label, destructive: true, run: async () => {
         setPrivacyBusy(true);

@@ -1,6 +1,7 @@
 import { requireOptionalNativeModule } from 'expo';
 import { requestPermissionsAsync } from 'expo-media-library/legacy';
 import { Linking, PermissionsAndroid, Platform } from 'react-native';
+import type { RecallSearch, RecallStatus } from './recallQuery';
 
 export type Access = 'full' | 'limited' | 'none';
 export type PermissionStatus = 'full' | 'limited' | 'denied' | 'revoked' | 'unrequested';
@@ -39,6 +40,14 @@ export type Scan = {
 };
 
 export type ReviewCategory = { name: string; count: number; previews: string[] };
+export type PhotoLocationStatus = { enabled: boolean; permission: boolean; pending: number; mapped: number; running: boolean };
+export type MapBounds = { south: number; west: number; north: number; east: number };
+export type MapClusters = { clusters: { id: string; count: number; lat: number; lon: number }[]; total: number; bounds: MapBounds | null };
+export type MapPage = { photos: (Result & { captured: number | null })[]; nextOffset: number | null };
+export type PersonalCandidate = {
+  photo: Result; captured: number; place: string | null; lat: number | null; lon: number | null; related: string[];
+};
+export type PersonalSection = 'connect' | 'patterns' | 'evolve';
 
 export type EyeStatus = {
   sdkVersion: string;
@@ -83,6 +92,26 @@ type GalleryModule = {
   startScan(albums: string[], uris: string[]): void;
   scanStatus(): Scan;
   controlScan(action: 'pause' | 'resume' | 'cancel'): void;
+  requestMemoryBackfill(): Promise<void>;
+  memoryStatus(): Promise<RecallStatus>;
+  searchMemory: RecallSearch;
+  setMemoryPlace(imageId: string, place: string | null): Promise<void>;
+  memoryPlace(imageId: string): Promise<string | null>;
+  photoLocationStatus(): Promise<PhotoLocationStatus>;
+  setPhotoLocationsEnabled(enabled: boolean): Promise<void>;
+  clearPhotoLocations(): Promise<void>;
+  mapPhotoClusters(south: number, west: number, north: number, east: number, zoom: number,
+    start: number | null, end: number | null): Promise<MapClusters>;
+  mapPhotoPage(bounds: [number, number, number, number], zoom: number,
+    start: number | null, end: number | null, clusterId: string | null, offset: number): Promise<MapPage>;
+  personalCandidates(start: number, end: number): Promise<{ items: PersonalCandidate[]; truncated: boolean }>;
+  readPersonal(section: PersonalSection): Promise<string | null>;
+  savePersonal(section: PersonalSection, data: string | null): Promise<void>;
+  voiceStatus(): Promise<{ ready: boolean; bytes: number }>;
+  installVoice(): Promise<void>;
+  startVoice(): void;
+  finishVoice(): Promise<string>;
+  cancelVoice(): void;
   eyeStatus(): Promise<EyeStatus>;
   runEyeCheck(): Promise<void>;
   processing(): Promise<Processing>;

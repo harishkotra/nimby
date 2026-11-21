@@ -2,26 +2,13 @@ import { requireNativeView } from 'expo';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, AppState, FlatList, Linking, PermissionsAndroid, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { NativeSyntheticEvent, ViewProps } from 'react-native';
-import { native, type Result } from './gallery';
+import { native as gallery, type MapBounds, type MapPage, type PhotoLocationStatus, type Result } from './gallery';
 import { Body, Button, Chip, color, ErrorText, Heading, Icon, styles, Thumbnail } from './ui';
 import { useDialog } from './Dialogs';
 
-export type MapBounds = { south: number; west: number; north: number; east: number };
 type Viewport = MapBounds & { zoom: number };
 type Cluster = { id: string; count: number; lat: number; lon: number };
-export type MapClusters = { clusters: Cluster[]; total: number; bounds: MapBounds | null };
-type MapPhoto = Result & { captured: number | null };
-export type MapPage = { photos: MapPhoto[]; nextOffset: number | null };
-export type PhotoLocationStatus = { enabled: boolean; permission: boolean; pending: number; mapped: number; running: boolean };
-type MapBridge = {
-  photoLocationStatus(): Promise<PhotoLocationStatus>;
-  setPhotoLocationsEnabled(enabled: boolean): Promise<void>;
-  clearPhotoLocations(): Promise<void>;
-  mapPhotoClusters(south: number, west: number, north: number, east: number, zoom: number,
-    start: number | null, end: number | null): Promise<MapClusters>;
-  mapPhotoPage(bounds: [number, number, number, number], zoom: number,
-    start: number | null, end: number | null, clusterId: string | null, offset: number): Promise<MapPage>;
-};
+type MapPhoto = MapPage['photos'][number];
 type MapViewProps = ViewProps & {
   points: string;
   fit?: string;
@@ -34,7 +21,6 @@ type ListScope = { id: string | null; viewport: Viewport };
 const world: Viewport = { south: -90, west: -180, north: 90, east: 180, zoom: 0 };
 const allTime: readonly [number | null, number | null] = [null, null];
 const allPhotos: ListScope = { id: null, viewport: world };
-const gallery = native as (typeof native & MapBridge) | null;
 
 function filterRange(filter: TimeFilter): readonly [number | null, number | null] {
   if (filter === 'all') return allTime;

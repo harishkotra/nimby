@@ -13,9 +13,9 @@ const titles: Record<ReviewMode, string> = {
   suggestions: 'Worth revisiting', kept: 'Kept photos', dismissed: 'Dismissed photos', scan: 'Scan results',
 };
 
-export function Revisit({ revision, open, openCategory, openMode, scan, browsing, toggleBrowse }: {
+export function Revisit({ revision, open, openCategory, openMode, scan, browsing, toggleBrowse, search }: {
   revision: number; open: (item: Result) => void; openCategory: (category: string) => void;
-  openMode: (mode: Feed) => void; scan: () => void; browsing: boolean; toggleBrowse: () => void;
+  openMode: (mode: Feed) => void; scan: () => void; browsing: boolean; toggleBrowse: () => void; search: () => void;
 }) {
   const [picks, setPicks] = useState<Result[] | null>(null);
   const [categories, setCategories] = useState<ReviewCategory[]>([]);
@@ -51,7 +51,9 @@ export function Revisit({ revision, open, openCategory, openMode, scan, browsing
   const lead = picks?.[0];
   return <ScrollView contentContainerStyle={styles.content}>
     <View style={layout.intro}>
-      <Heading large>Worth revisiting</Heading>
+      <View style={styles.between}><Heading large>Worth revisiting</Heading>
+        <Button label="Search" icon="search" subtle run={search} />
+      </View>
       <Body>A few saved photos to come back to</Body>
     </View>
     {error ? <View style={layout.intro}><ErrorText>Could not load picks.</ErrorText>
@@ -280,6 +282,7 @@ export function PhotoDetail({ item, close, changed, open }: {
   const [name, setName] = useState(item.collection ?? '');
   const [moreActions, setMoreActions] = useState(false);
   const [modelDetails, setModelDetails] = useState(false);
+  const [placeName, setPlaceName] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -318,6 +321,27 @@ export function PhotoDetail({ item, close, changed, open }: {
     native?.groups(true).then(setCollections).catch(() => setCollections([]));
   }
 
+  async function openPlaceEditor() {
+    if (!native || busy) return;
+    setBusy(true);
+    setError('');
+    try { setPlaceName(await native.memoryPlace(photo.id) ?? ''); }
+    catch { setError('Could not read the saved place name.'); }
+    finally { setBusy(false); }
+  }
+
+  async function savePlace() {
+    if (!native || busy || placeName == null) return;
+    setBusy(true);
+    setError('');
+    try {
+      await native.setMemoryPlace(photo.id, placeName.trim() || null);
+      setPlaceName(null);
+      changed();
+    } catch { setError('Could not save the place name.'); }
+    finally { setBusy(false); }
+  }
+
   const photoType = photo.kind ? titleCase(photo.kind) : null;
   const reference = photo.category && photo.category !== 'Other' ? photo.category : null;
   const finding = reference === 'Screenshots' && photoType === 'Screenshot' ? photoType : reference ?? photoType;
@@ -349,6 +373,7 @@ export function PhotoDetail({ item, close, changed, open }: {
     {moreActions && <View style={layout.details}>
       <Heading>Photo actions</Heading>
       {detailRow('Organize into a collection', organize, busy)}
+      {detailRow('Edit place name', () => void openPlaceEditor(), busy)}
       {kept && detailRow('Undo keep', () => void decide('new'), busy)}
       {photo.decision !== 'dismissed' && detailRow('Dismiss suggestion', () => void decide('dismissed'), busy)}
       {photo.uri && detailRow('Archive photo', () => {
@@ -362,6 +387,16 @@ export function PhotoDetail({ item, close, changed, open }: {
       })}
       {similar == null && detailRow(loadingSimilar ? 'Finding similar photos…' : 'Find similar photos',
         () => void findSimilar(), loadingSimilar)}
+    </View>}
+    {placeName != null && <View style={styles.column}>
+      <Heading>Place name</Heading>
+      <Body>Use this name to find the photo in Recall. Clear the field to remove it.</Body>
+      <TextInput accessibilityLabel="Place name" placeholder="Place name" placeholderTextColor={color.muted}
+        value={placeName} onChangeText={setPlaceName} maxLength={80} style={layout.input} />
+      <View style={styles.row}>
+        <Button label="Save place" run={() => void savePlace()} disabled={busy} />
+        <Button label="Cancel" subtle run={() => setPlaceName(null)} disabled={busy} />
+      </View>
     </View>}
     {organizing && <View style={styles.column}>
       <Heading>Choose a collection</Heading>

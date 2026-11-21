@@ -9,7 +9,11 @@ const measure = (n: number | null | undefined) => n == null ? '—' : formatByte
 const chartPalette = ['#A4E3C3', '#8AC3CE', '#C4B4DD', '#E2C291', '#8BA699', '#546B61'];
 const ratio = (a: number | null | undefined, b: number | null | undefined) => b ? Math.min(1, Math.max(0, (a ?? 0) / b)) : 0;
 const widthPercent = (value: number) => `${value * 100}%` as DimensionValue;
-type Links = { gallery: () => void; duplicates: () => void; archive: () => void; discover: (mode: Feed, category?: string) => void };
+type Links = {
+  gallery: () => void; duplicates: () => void; archive: () => void;
+  discover: (mode: Feed, category?: string) => void; recall: () => void; photoMap: () => void;
+  connect: () => void; patterns: () => void; parallel: () => void; evolve: () => void;
+};
 
 function Action({ label, value, icon, run }: { label: string; value?: string; icon: IconName; run: () => void }) {
   return <Pressable accessibilityRole="button" onPress={run}
@@ -62,7 +66,8 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
         : 'Scan your photos to find receipts, screenshots, and other saved references.'}</Body>
     </View>
     <View style={layout.scanGroup}>
-      <Button label="Scan gallery" icon="scan" run={scan} disabled={busy} />
+      <Button label="Search photos" icon="search" run={links.recall} />
+      <Button label="Scan gallery" icon="scan" subtle run={scan} disabled={busy} />
       <View style={layout.halves}>
         <Button label="Phone albums" subtle disabled={busy} run={links.gallery} style={layout.flex} />
         <Button label="Pick photos" subtle disabled={busy} run={pick} style={layout.flex} />
@@ -90,6 +95,7 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
       <Action icon="bookmark" label="Worth revisiting" value="A short list of saved references"
         run={() => links.discover('suggestions')} />
       <Action icon="layers" label="Duplicates" value={data ? `${count(data.duplicateGroups)} groups to review` : undefined} run={links.duplicates} />
+      <Action icon="map" label="Photo Map" run={links.photoMap} />
     </View>
   </ScrollView>;
 }
@@ -104,6 +110,14 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={layout.intro}><Heading large>Insights</Heading><Body>A closer look at what’s in your gallery.</Body></View>
     {error && <ErrorText>Could not read the latest gallery totals.</ErrorText>}
+    <View style={layout.section}>
+      <Heading>Explore your memories</Heading>
+      <Action icon="map" label="Photo Map" value="Explore where your photos were taken" run={links.photoMap} />
+      <Action icon="clock" label="Timeline" value="Browse related moments" run={links.connect} />
+      <Action icon="layers" label="Discover patterns" value="See themes that show up over time" run={links.patterns} />
+      <Action icon="chevron" label="Compare next steps" value="Make a plan from saved photos" run={links.parallel} />
+      <Action icon="check" label="Choices and outcomes" value="Remember what worked" run={links.evolve} />
+    </View>
     <View style={layout.coverage}>
       <CoverageRing value={coverage} size={Math.min(196, width * 0.50)} />
       <Text style={layout.chartTitle}>Gallery coverage</Text>

@@ -23,6 +23,8 @@ class GalleryModule : Module() {
     private val memory by lazy { GalleryMemory(context, gallery) }
     private val scan = lazy { ScanWorker(context, gallery, memory) }
     private val worker get() = scan.value
+    private val voiceEngine = lazy { VoiceRecall(context) }
+    private val personal by lazy { PersonalMemory(context, memory) }
     private val picker = PickMultipleVisualMedia()
     private var pickerPromise: Promise? = null
     @Volatile private var deletionPending = false
@@ -109,6 +111,75 @@ class GalleryModule : Module() {
         Function("scanStatus") { -> worker.status() }
         Function("controlScan") { action: String -> worker.control(action) }
 
+        AsyncFunction("voiceStatus") Coroutine { ->
+            withContext(Dispatchers.IO) { voiceEngine.value.status() }
+        }
+        AsyncFunction("installVoice") Coroutine { ->
+            withContext(Dispatchers.IO) { voiceEngine.value.install() }
+        }
+        Function("startVoice") { -> voiceEngine.value.start() }
+        AsyncFunction("finishVoice") Coroutine { ->
+            withContext(Dispatchers.IO) { voiceEngine.value.finish() }
+        }
+        Function("cancelVoice") { -> if (voiceEngine.isInitialized()) voiceEngine.value.cancelRecording() }
+        OnActivityEntersBackground {
+            if (voiceEngine.isInitialized()) voiceEngine.value.cancelRecording()
+        }
+        OnActivityEntersForeground { worker.requestMemoryBackfill() }
+
+        AsyncFunction("requestMemoryBackfill") Coroutine { ->
+            withContext(Dispatchers.IO) { worker.requestMemoryBackfill() }
+        }
+        AsyncFunction("memoryStatus") Coroutine { ->
+            withContext(Dispatchers.IO) { worker.memoryStatus() }
+        }
+        AsyncFunction("searchMemory") Coroutine {
+            query: String, category: String?, start: Long?, end: Long?, place: String?, collection: String?, textOnly: Boolean, offset: Int ->
+            withContext(Dispatchers.IO) {
+                memory.searchMemory(query.take(512), category, start, end, place, collection, textOnly, offset.coerceAtLeast(0))
+            }
+        }
+        AsyncFunction("setMemoryPlace") Coroutine { imageId: String, place: String? ->
+            withContext(Dispatchers.IO) { memory.setMemoryPlace(imageId, place) }
+        }
+        AsyncFunction("memoryPlace") Coroutine { imageId: String ->
+            withContext(Dispatchers.IO) { memory.memoryPlace(imageId) }
+        }
+        AsyncFunction("photoLocationStatus") Coroutine { ->
+            withContext(Dispatchers.IO) { worker.photoLocationStatus() }
+        }
+        AsyncFunction("setPhotoLocationsEnabled") Coroutine { enabled: Boolean ->
+            withContext(Dispatchers.IO) { worker.setPhotoLocationsEnabled(enabled) }
+        }
+        AsyncFunction("clearPhotoLocations") Coroutine { ->
+            withContext(Dispatchers.IO) { worker.clearPhotoLocations() }
+        }
+        AsyncFunction("personalCandidates") Coroutine { start: Long, end: Long ->
+            withContext(Dispatchers.IO) { personal.candidates(start, end, worker.photoLocationsAvailable()) }
+        }
+        AsyncFunction("readPersonal") Coroutine { section: String ->
+            withContext(Dispatchers.IO) { personal.read(section) }
+        }
+        AsyncFunction("savePersonal") Coroutine { section: String, data: String? ->
+            withContext(Dispatchers.IO) { personal.save(section, data) }
+        }
+        AsyncFunction("mapPhotoClusters") Coroutine {
+            south: Double, west: Double, north: Double, east: Double, zoom: Double, start: Long?, end: Long? ->
+            withContext(Dispatchers.IO) {
+                check(worker.photoLocationsAvailable()) { "Enable photo locations to open the map." }
+                photoMapClusters(memory, MapViewport(south, west, north, east), zoom, start, end).bridge()
+            }
+        }
+        AsyncFunction("mapPhotoPage") Coroutine {
+            bounds: List<Double>, zoom: Double, start: Long?, end: Long?, clusterId: String?, offset: Int ->
+            withContext(Dispatchers.IO) {
+                check(worker.photoLocationsAvailable()) { "Enable photo locations to open the map." }
+                require(bounds.size == 4)
+                val (south, west, north, east) = bounds
+                photoMapPage(memory, MapViewport(south, west, north, east), zoom, start, end, clusterId, offset).bridge()
+            }
+        }
+
         AsyncFunction("eyeStatus") Coroutine { ->
             withContext(Dispatchers.IO) { worker.eyeStatus() }
         }
@@ -130,7 +201,7 @@ class GalleryModule : Module() {
             withContext(Dispatchers.IO) { memory.excludeAlbum(id, name, excluded) }
         }
         AsyncFunction("clearAnalysis") Coroutine { all: Boolean ->
-            withContext(Dispatchers.IO) { worker.clearAnalysis(all) }
+            withContext(Dispatchers.IO) { worker.clearAnalysis(all) { personal.clear() } }
         }
 
         AsyncFunction("archivePage") Coroutine { offset: Int ->
@@ -223,6 +294,7 @@ class GalleryModule : Module() {
         }
 
         OnDestroy {
+            if (voiceEngine.isInitialized()) voiceEngine.value.destroy()
             if (scan.isInitialized()) worker.destroy()
             pickerPromise?.reject("PICKER_CLOSED", "The photo picker closed.", null)
             pickerPromise = null

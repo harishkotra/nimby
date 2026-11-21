@@ -17,6 +17,8 @@ const icons = {
   archive: require('./assets/icons/archive.png'),
   settings: require('./assets/icons/settings.png'),
   scan: require('./assets/icons/scan.png'),
+  search: require('./assets/icons/search.png'),
+  map: require('./assets/icons/map.png'),
   chevron: require('./assets/icons/chevron.png'),
   down: require('./assets/icons/down.png'),
   up: require('./assets/icons/up.png'),

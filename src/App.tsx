@@ -8,15 +8,45 @@ import { DuplicatesScreen } from './DuplicatesScreen';
 import { GalleryScreen } from './GalleryScreen';
 import { ArchiveScreen } from './ArchiveScreen';
 import { SettingsScreen } from './SettingsScreen';
+import { RecallScreen } from './RecallScreen';
+import { PhotoMapScreen } from './PhotoMapScreen';
+import { VoiceSearch } from './VoiceSearch';
+import { ConnectScreen } from './ConnectScreen';
+import { parseCorrections } from './connectTimeline';
+import { PatternsScreen } from './PatternsScreen';
+import { ParallelScreen, type ParallelChoice } from './ParallelScreen';
+import { EvolveScreen } from './EvolveScreen';
+import { appendChoice, photoFeedbackScores, preferredActions, readEvolveState } from './evolve';
+import { applyRecallFeedback } from './recallFeedback';
+import type { RecallSearch } from './recallQuery';
 import { native, openSettings, requestGalleryAccess, scanActive, type Access, type Album, type Feed, type Overview, type Result, type Scan } from './gallery';
 import { Body, Button, color, ErrorText, Heading, Icon, IconButton, type IconName, styles } from './ui';
 
-type Screen = 'Home' | 'Revisit' | 'Gallery' | 'Discover' | 'Analysis' | 'Settings' | 'Archive' | 'Insights' | 'Duplicates';
+type Screen = 'Home' | 'Revisit' | 'Gallery' | 'Discover' | 'Analysis' | 'Settings' | 'Archive' | 'Insights' | 'Duplicates'
+  | 'Recall' | 'PhotoMap' | 'Connect' | 'Patterns' | 'Parallel' | 'Evolve';
 const tabs = [
   { name: 'Home', icon: 'home' }, { name: 'Revisit', icon: 'bookmark' },
   { name: 'Insights', icon: 'insights' }, { name: 'Archive', icon: 'archive' },
 ] as const satisfies readonly { name: Screen; icon: IconName }[];
 
+const loadCandidates = (start: number, end: number) => native!.personalCandidates(start, end);
+const loadCorrections = () => native!.readPersonal('connect');
+const saveCorrections = (data: string) => native!.savePersonal('connect', data);
+const loadPatterns = () => native!.readPersonal('patterns');
+const savePatterns = (data: string) => native!.savePersonal('patterns', data);
+const loadConfirmedGroups = async () => parseCorrections(await loadCorrections()).groups
+  .filter((group) => group.title.trim())
+  .map((group) => ({ title: group.title, photoIds: group.members }));
+const loadEvolve = () => native!.readPersonal('evolve');
+const saveEvolve = (data: string) => native!.savePersonal('evolve', data);
+const resetCorrections = (section: 'connect' | 'patterns') => native!.savePersonal(section, null);
+const saveChoice = async (choice: ParallelChoice) => {
+  await saveEvolve(JSON.stringify(appendChoice(readEvolveState(await loadEvolve()), choice)));
+};
+const searchWithFeedback: RecallSearch = async (...args) => {
+  const [page, state] = await Promise.all([native!.searchMemory(...args), loadEvolve().catch(() => null)]);
+  return applyRecallFeedback(page, args[0], photoFeedbackScores(readEvolveState(state)));
+};
 
 export default function App() {
   return <SafeAreaProvider>
@@ -40,6 +70,7 @@ function Nimby() {
   const [galleryError, setGalleryError] = useState('');
   const [galleryRevision, setGalleryRevision] = useState(0);
   const [revision, setRevision] = useState(0);
+  const [preferred, setPreferred] = useState<string[]>([]);
   const [recent, setRecent] = useState<Result[]>([]);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [overviewError, setOverviewError] = useState(false);
@@ -85,6 +116,15 @@ function Nimby() {
     }
     return current;
   }
+
+  useEffect(() => {
+    if (screen !== 'Parallel') return;
+    let current = true;
+    void loadEvolve().then((state) => {
+      if (current) setPreferred(preferredActions(readEvolveState(state)));
+    }).catch(() => { if (current) setPreferred([]); });
+    return () => { current = false; };
+  }, [screen, revision]);
 
   useEffect(() => {
     const state = AppState.addEventListener('change', (next) => {
@@ -233,7 +273,8 @@ function Nimby() {
       else navigate(reviewBack.current);
     } else if (screen === 'Analysis') {
       navigate(analysisBack.current);
-    } else if (screen === 'Settings' || screen === 'Duplicates') {
+    } else if (screen === 'Settings' || screen === 'Duplicates' || screen === 'Recall' || screen === 'PhotoMap'
+      || screen === 'Connect' || screen === 'Patterns' || screen === 'Parallel' || screen === 'Evolve') {
       navigate(backTo.current);
     } else {
       navigate('Home');
@@ -261,6 +302,12 @@ function Nimby() {
     duplicates: () => navigate('Duplicates'),
     archive: () => navigate('Archive'),
     discover: openReview,
+    recall: () => navigate('Recall'),
+    photoMap: () => navigate('PhotoMap'),
+    connect: () => navigate('Connect'),
+    patterns: () => navigate('Patterns'),
+    parallel: () => navigate('Parallel'),
+    evolve: () => navigate('Evolve'),
   };
 
   const primary = tabs.some((tab) => tab.name === screen);
@@ -292,7 +339,20 @@ function Nimby() {
         pick={() => void pick()} scan={start} revision={galleryRevision} />}
       {screen === 'Revisit' && <Revisit revision={revision} open={setDetail} openMode={openReview}
         openCategory={(name) => openReview('suggestions', name)} scan={() => void galleryAction('scan')}
-        browsing={browseReferences} toggleBrowse={() => setBrowseReferences((value) => !value)} />}
+        browsing={browseReferences} toggleBrowse={() => setBrowseReferences((value) => !value)} search={links.recall} />}
+      {screen === 'Recall' && <RecallScreen revision={revision} open={setDetail}
+        search={searchWithFeedback} status={native!.memoryStatus} startBackfill={native!.requestMemoryBackfill}
+        voice={(onTranscript) => <VoiceSearch onTranscript={onTranscript} />} />}
+      {screen === 'PhotoMap' && <PhotoMapScreen revision={revision} open={setDetail} />}
+      {screen === 'Connect' && <ConnectScreen revision={revision} open={setDetail} loadCandidates={loadCandidates}
+        loadCorrections={loadCorrections} saveCorrections={saveCorrections} onCorrectionsChanged={changed} />}
+      {screen === 'Patterns' && <PatternsScreen revision={revision} open={setDetail} loadCandidates={loadCandidates}
+        loadFeedback={loadPatterns} saveFeedback={savePatterns} loadConfirmedGroups={loadConfirmedGroups} />}
+      {screen === 'Parallel' && <ParallelScreen revision={revision} open={setDetail} loadCandidates={loadCandidates}
+        saveChoice={saveChoice} preferredActions={preferred} />}
+      {screen === 'Evolve' && <EvolveScreen revision={revision} loadState={loadEvolve} saveState={saveEvolve}
+        changed={changed} loadConnectCorrections={loadCorrections} loadPatternFeedback={loadPatterns}
+        resetCorrections={resetCorrections} />}
       {screen === 'Discover' && <Discover key={JSON.stringify([feed, reviewScan])} mode={feed}
         category={feedCategory} scanId={reviewScan} revision={revision} open={setDetail} changed={changed}
         openCategory={setFeedCategory} />}
