@@ -24,7 +24,9 @@ export function useArchiveConfirmation() {
   };
 }
 
-export function ArchiveScreen({ revision, scanning, changed }: { revision: number; scanning: boolean; changed: () => void }) {
+export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
+  revision: number; scanning: boolean; changed: () => void; openDuplicates?: () => void;
+}) {
   const show = useDialog();
   const [items, setItems] = useState<ArchivedPhoto[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -140,8 +142,10 @@ export function ArchiveScreen({ revision, scanning, changed }: { revision: numbe
       </View>}
       ListFooterComponent={loading ? <ActivityIndicator color={color.blue} /> : error ?
         <Button label="Retry" subtle run={() => void load(items.length)} /> : undefined}
-      ListEmptyComponent={!loading && !error ? <EmptyState icon="archive" title="Your archive is empty"
-        text="Photos archived from Revisit or duplicate review will appear here." /> : undefined}
+      ListEmptyComponent={!loading && !error ? <EmptyState icon="archive" mascot="organizing" title="Your archive is empty"
+        text="Photos archived from Revisit or duplicate review will appear here."
+        action={openDuplicates ? <Button label="Review duplicates" icon="layers" subtle run={openDuplicates} /> : undefined} />
+        : undefined}
       renderTile={(item) => {
         const days = daysLeft(item);
         const timing = days ? `${days} ${days === 1 ? 'day' : 'days'} until review` : 'Ready for review';

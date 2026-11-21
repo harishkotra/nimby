@@ -237,9 +237,13 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
         <Chip label="Any date" selected={filter === 'all'} run={() => setTime('all')} />
         <Chip label="This year" selected={filter === 'year'} run={() => setTime('year')} />
         <Chip label="Past 30 days" selected={filter === 'month'} run={() => setTime('month')} />
-      </View> : <Body>See places saved in your photos. Locations stay on this phone.</Body>}
+      </View> : <Body>Pinch to zoom · drag with two fingers to pan once locations are on.</Body>}
       {statusError ? <ErrorText>{statusError}</ErrorText> : null}
     </View>
+    {!active && status ? <View style={layout.emptyCard}>
+      <Heading>No locations yet</Heading>
+      <Body>Turn on photo locations to plot GPS from your gallery. You can clear them any time from this screen.</Body>
+    </View> : null}
     {active && scope ? <FlatList style={layout.content} contentContainerStyle={layout.list}
       data={photos} keyExtractor={(item) => item.sourceKey ?? item.uri ?? item.id}
       ListHeaderComponent={<View style={layout.listHeader}><Heading>{scope.id ? 'Photos in this area' : 'Photos with locations'}</Heading>
@@ -274,16 +278,17 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
     <View style={layout.footer}>
       {queryError && active ? <View style={styles.row}><ErrorText>{queryError}</ErrorText>
         <Button label="Refresh locations" subtle run={() => setRetry((value) => value + 1)} /></View> : null}
-      {!active ? status ? <View style={styles.row}>
+      {!active ? status ? <View style={layout.emptyFooter}>
+        <Body>Nimby can read GPS from photos you allow. Coordinates stay on this phone.</Body>
         <Button label="Enable photo locations" disabled={busy} run={() => void enable()} />
-        {status.enabled && <Button label="Clear locations" subtle disabled={busy} run={confirmClear} />}
+        {status.enabled && status.mapped > 0 && <Button label="Clear locations" subtle disabled={busy} run={confirmClear} />}
       </View> : statusError ? <Button label="Retry" subtle run={() => setRetry((value) => value + 1)} />
         : <ActivityIndicator color={color.blue} /> : <View style={styles.between}>
         <Body>{status.running || status.pending ? 'Reading photo locations…'
           : ready && coveredCount === 0 ? 'No accessible photos with GPS match these dates'
           : !scope && ready && clusters.length === 0 ? 'No mapped photos in this view'
           : `${coveredCount.toLocaleString()} ${coveredCount === 1 ? 'photo' : 'photos'} with locations`}</Body>
-        <Button label="Clear locations" subtle disabled={busy} run={confirmClear} />
+        {(status.mapped > 0 || coveredCount > 0) && <Button label="Clear locations" subtle disabled={busy} run={confirmClear} />}
       </View>}
     </View>
   </View>;
@@ -302,5 +307,7 @@ const layout = StyleSheet.create({
   photoName: { color: color.ink, fontSize: 15, fontWeight: '600' },
   attribution: { position: 'absolute', bottom: 4, right: 8, minHeight: 48, justifyContent: 'flex-end' },
   attributionText: { padding: 4, color: color.lightText, backgroundColor: color.paper, fontSize: 11 },
-  footer: { paddingHorizontal: 20, paddingVertical: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule, gap: 8 },
+  footer: { paddingHorizontal: 20, paddingVertical: 8, paddingBottom: 16, borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule, gap: 8 },
+  emptyFooter: { gap: 10 },
+  emptyCard: { marginHorizontal: 20, marginBottom: 12, padding: 16, borderRadius: 16, backgroundColor: color.white, gap: 6 },
 });

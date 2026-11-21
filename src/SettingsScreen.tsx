@@ -43,6 +43,7 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
   const [privacyBusy, setPrivacyBusy] = useState(false);
   const [modelDetails, setModelDetails] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const scanning = scanActive(scan);
   const scanLabel = { preparing: 'Preparing', running: 'Analyzing photos', paused: 'Paused', matching: 'Checking duplicates',
     idle: 'Idle', complete: 'Idle', blocked: 'Last scan stopped', cancelled: 'Last scan cancelled' }[scan.phase];
@@ -134,43 +135,8 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={layout.intro}>
       <Heading large>Settings</Heading>
-      <Body>Model health, photo access, and your data.</Body>
+      <Body>Photo access, scan status, and your data.</Body>
     </View>
-    <View style={layout.panel}>
-      <View style={layout.modelHeader}>
-        <View style={layout.modelIcon}><Icon name="scan" tint={color.blue} /></View>
-        <View style={layout.modelText}><Heading>Desert Ant Eye</Heading><Body>Runs on your device</Body></View>
-      </View>
-      <View style={styles.row}>
-        {checking ? <ActivityIndicator color={color.blue} /> : <View style={[layout.dot, status?.checkPhase === 'failed' && layout.errorDot]} />}
-        <Text accessibilityLiveRegion="polite" style={[layout.status, status?.checkPhase === 'failed' && layout.danger]}>{checkLabel}</Text>
-      </View>
-      {!checking && status?.checkPhase === 'passed' && duration != null && <Body>Inference completed in {duration.toLocaleString()} ms.</Body>}
-      {!checking && status?.checkPhase === 'failed' && <ErrorText>{status.checkError}</ErrorText>}
-      {status?.runtimeError && status.runtimeError !== status.checkError && <ErrorText>{status.runtimeError}</ErrorText>}
-      <Body>{scanning ? 'Finish or cancel the current scan to run the check.' : 'The self-test analyzes a bundled image.'}</Body>
-      <Button label={checking ? 'Checking Eye…' : 'Run Self-Test'} disabled={checking || scanning || !status}
-        run={() => void runCheck()} />
-    </View>
-    {statusError && <ErrorText>Could not read model status. Install the current Nimby Android build and reopen Settings.</ErrorText>}
-    {status && <View style={layout.section}>
-      <View style={layout.details}>
-        <Detail label="Runtime" value={{ initialized: 'Initialized', unloaded: 'Unloaded', loading: 'Loading', error: 'Error' }[status.runtime] ?? 'Unavailable'} />
-        <Detail label="Model files" value={status.filesReady ? 'Prepared' : status.packagedBytes ? 'Bundled' : 'Unavailable'} />
-      </View>
-      <SettingsAction name="Model details" icon="info" expanded={modelDetails} run={() => setModelDetails(!modelDetails)} />
-      {modelDetails && <>
-        <View style={layout.details}>
-          <Detail label="Eye SDK" value={status.sdkVersion} />
-          <Detail label="Model version" value={status.modelVersion ?? 'Available after inference'} />
-          <Detail label="In app package" value={formatBytes(status.packagedBytes)} />
-          <Detail label="Prepared files" value={formatBytes(status.stagedBytes)} />
-          <Detail label="Last successful inference" value={status.lastSuccess ? new Date(status.lastSuccess).toLocaleString() : 'None recorded'} />
-          <Detail label="Last inference latency" value={status.lastInferenceMs == null ? 'None recorded' : `${status.lastInferenceMs} ms`} />
-        </View>
-        <Body>Nimby loads Eye during scans and self-tests.</Body>
-      </>}
-    </View>}
     <View style={layout.section}>
       <Heading>Photo access</Heading>
       <View style={layout.permission}>
@@ -204,7 +170,8 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
       </View>}
     </View>
     <View style={layout.section}>
-      <Heading>Privacy & data</Heading>
+      <Heading>Your data</Heading>
+      <SettingsAction name="Review archived media" icon="archive" run={openArchive} />
       <SettingsAction name="Manage excluded albums" icon="gallery" expanded={albums !== null} run={() => void openExclusions()} />
       {albums && <>
         <Body>Excluded albums are skipped in full-gallery scans. You can still scan them individually.</Body>
@@ -217,9 +184,49 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
             })}
         </View>
       </>}
-      <SettingsAction name="Review archived media" icon="archive" run={openArchive} />
-      <SettingsAction name="Clear AI analysis cache" icon="layers" disabled={scanning || checking || privacyBusy} run={() => confirmClear(false)} />
-      <SettingsAction name="Delete local analysis metadata" icon="info" danger disabled={scanning || checking || privacyBusy} run={() => confirmClear(true)} />
+    </View>
+    <View style={layout.section}>
+      <SettingsAction name="Advanced · Eye model" icon="scan" expanded={advancedOpen}
+        run={() => setAdvancedOpen(!advancedOpen)} />
+      {advancedOpen && <>
+        <View style={layout.panel}>
+          <View style={layout.modelHeader}>
+            <View style={layout.modelIcon}><Icon name="scan" tint={color.blue} /></View>
+            <View style={layout.modelText}><Heading>Desert Ant Eye</Heading><Body>Runs on your device</Body></View>
+          </View>
+          <View style={styles.row}>
+            {checking ? <ActivityIndicator color={color.blue} /> : <View style={[layout.dot, status?.checkPhase === 'failed' && layout.errorDot]} />}
+            <Text accessibilityLiveRegion="polite" style={[layout.status, status?.checkPhase === 'failed' && layout.danger]}>{checkLabel}</Text>
+          </View>
+          {!checking && status?.checkPhase === 'passed' && duration != null && <Body>Inference completed in {duration.toLocaleString()} ms.</Body>}
+          {!checking && status?.checkPhase === 'failed' && <ErrorText>{status.checkError}</ErrorText>}
+          {status?.runtimeError && status.runtimeError !== status.checkError && <ErrorText>{status.runtimeError}</ErrorText>}
+          <Body>{scanning ? 'Finish or cancel the current scan to run the check.' : 'The self-test analyzes a bundled image.'}</Body>
+          <Button label={checking ? 'Checking Eye…' : 'Run Self-Test'} disabled={checking || scanning || !status}
+            run={() => void runCheck()} />
+        </View>
+        {statusError && <ErrorText>Could not read model status. Install the current Nimby Android build and reopen Settings.</ErrorText>}
+        {status && <>
+          <View style={layout.details}>
+            <Detail label="Runtime" value={{ initialized: 'Initialized', unloaded: 'Unloaded', loading: 'Loading', error: 'Error' }[status.runtime] ?? 'Unavailable'} />
+            <Detail label="Model files" value={status.filesReady ? 'Prepared' : status.packagedBytes ? 'Bundled' : 'Unavailable'} />
+          </View>
+          <SettingsAction name="Model details" icon="info" expanded={modelDetails} run={() => setModelDetails(!modelDetails)} />
+          {modelDetails && <>
+            <View style={layout.details}>
+              <Detail label="Eye SDK" value={status.sdkVersion} />
+              <Detail label="Model version" value={status.modelVersion ?? 'Available after inference'} />
+              <Detail label="In app package" value={formatBytes(status.packagedBytes)} />
+              <Detail label="Prepared files" value={formatBytes(status.stagedBytes)} />
+              <Detail label="Last successful inference" value={status.lastSuccess ? new Date(status.lastSuccess).toLocaleString() : 'None recorded'} />
+              <Detail label="Last inference latency" value={status.lastInferenceMs == null ? 'None recorded' : `${status.lastInferenceMs} ms`} />
+            </View>
+            <Body>Nimby loads Eye during scans and self-tests.</Body>
+          </>}
+        </>}
+        <SettingsAction name="Clear AI analysis cache" icon="layers" disabled={scanning || checking || privacyBusy} run={() => confirmClear(false)} />
+        <SettingsAction name="Delete local analysis metadata" icon="info" danger disabled={scanning || checking || privacyBusy} run={() => confirmClear(true)} />
+      </>}
     </View>
     {requestError !== '' && <ErrorText>{requestError}</ErrorText>}
   </ScrollView>;

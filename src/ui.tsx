@@ -3,12 +3,31 @@ import {
   AccessibilityInfo, Image, Pressable, StyleSheet, Text, View,
   type ImageSourcePropType, type StyleProp, type ViewStyle,
 } from 'react-native';
-
 export const color = {
   paper: '#151716', white: '#202321', ink: '#F2F4F1', muted: '#A6ADA8', rule: '#393E3A',
   blue: '#B6E4C9', tint: '#2B3730', lightText: '#D5DBD6', deep: '#D5DBD6', danger: '#FFB4AB',
   black: '#101211', amber: '#E2C291',
 };
+
+/** Matches `layout.navItem` minHeight in App.tsx. Content must clear this when the tab bar is visible. */
+export const TAB_BAR_HEIGHT = 72;
+
+/** Bottom padding so scroll content clears the always-visible tab bar. */
+export function useTabContentInset(extra = 24) {
+  // Tab bar already sits inside SafeAreaView, so only clear the bar itself.
+  return TAB_BAR_HEIGHT + extra;
+}
+
+/** Coverage below this is treated as "early" — Scan stays primary over Search. */
+export const LOW_COVERAGE = 0.05;
+export const LOW_ANALYZED = 200;
+
+export function isLowCoverage(analyzed: number | null | undefined, accessible: number | null | undefined) {
+  if (analyzed == null) return true;
+  if (analyzed < LOW_ANALYZED) return true;
+  if (accessible == null || accessible <= 0) return analyzed < LOW_ANALYZED;
+  return analyzed / accessible < LOW_COVERAGE;
+}
 
 const icons = {
   home: require('./assets/icons/home.png'),
@@ -44,7 +63,7 @@ export function IconButton({ icon, label, run, style }: {
   icon: IconName; label: string; run: () => void; style?: StyleProp<ViewStyle>;
 }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={run}
-    style={({ pressed }) => [styles.iconButton, pressed && styles.faded, style]}>
+    style={({ pressed }) => [styles.iconButton, pressed && styles.pressed, style]}>
     <Icon name={icon} />
   </Pressable>;
 }
@@ -53,7 +72,10 @@ export function Button({ label, run, subtle, disabled, style, icon, destructive 
   label: string; run: () => void; subtle?: boolean; disabled?: boolean; style?: StyleProp<ViewStyle>; icon?: IconName; destructive?: boolean;
 }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={run}
-    style={({ pressed }) => [styles.button, subtle && styles.subtle, destructive && styles.destructive, (pressed || disabled) && styles.faded, style]}>
+    style={({ pressed }) => [
+      styles.button, subtle && styles.subtle, destructive && styles.destructive,
+      pressed && !disabled && styles.pressed, disabled && styles.faded, style,
+    ]}>
     {icon && <Icon name={icon} size={20} tint={subtle ? color.deep : color.paper} />}
     <Text style={[styles.buttonText, subtle && styles.subtleText]}>{label}</Text>
   </Pressable>;
@@ -61,7 +83,7 @@ export function Button({ label, run, subtle, disabled, style, icon, destructive 
 
 export function Chip({ label, run, selected }: { label: string; run: () => void; selected?: boolean }) {
   return <Pressable accessibilityRole="button" accessibilityState={{ selected }} onPress={run}
-    style={({ pressed }) => [styles.chip, selected && styles.selected, pressed && styles.faded]}>
+    style={({ pressed }) => [styles.chip, selected && styles.selected, pressed && styles.pressed]}>
     <Text style={[styles.chipText, selected && styles.selectedText]}>{label}</Text>
   </Pressable>;
 }
@@ -104,11 +126,22 @@ export function SectionTitle({ title, action, run }: { title: string; action?: s
   </View>;
 }
 
-export function EmptyState({ icon, title, text, action }: {
-  icon: IconName; title: string; text: string; action?: ReactNode;
+const mascots = {
+  thinking: require('./assets/mascot/04_thinking.png'),
+  scanning: require('./assets/mascot/05_scanning.png'),
+  organizing: require('./assets/mascot/07_organizing.png'),
+  resting: require('./assets/mascot/08_resting.png'),
+} as const;
+
+export type MascotMood = keyof typeof mascots;
+
+export function EmptyState({ icon, title, text, action, mascot }: {
+  icon: IconName; title: string; text: string; action?: ReactNode; mascot?: MascotMood;
 }) {
   return <View style={styles.empty}>
-    <View style={styles.emptyIcon}><Icon name={icon} size={20} tint={color.blue} /></View>
+    {mascot
+      ? <Image source={mascots[mascot]} accessible={false} style={styles.emptyMascot} resizeMode="contain" />
+      : <View style={styles.emptyIcon}><Icon name={icon} size={20} tint={color.blue} /></View>}
     <Text style={styles.emptyTitle}>{title}</Text>
     <Text style={[styles.body, styles.centered]}>{text}</Text>
     {action}
@@ -137,7 +170,7 @@ export const styles = StyleSheet.create({
   row: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
   between: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   column: { gap: 12 },
-  content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 32, gap: 24 },
+  content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: TAB_BAR_HEIGHT + 24, gap: 24 },
   button: { backgroundColor: color.ink, borderRadius: 12, minHeight: 48, paddingHorizontal: 16,
     paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   buttonText: { flexShrink: 1, fontWeight: '600', fontSize: 14, textAlign: 'center', color: color.paper },
@@ -145,6 +178,7 @@ export const styles = StyleSheet.create({
   destructive: { backgroundColor: color.danger },
   subtleText: { color: color.deep },
   faded: { opacity: 0.66 },
+  pressed: { opacity: 0.92, transform: [{ scale: 0.97 }] },
   iconButton: { height: 48, width: 48, borderRadius: 12, backgroundColor: color.white, alignItems: 'center', justifyContent: 'center' },
   chip: { backgroundColor: color.white, borderRadius: 12, minHeight: 48, justifyContent: 'center', paddingHorizontal: 16 },
   selected: { backgroundColor: color.blue },
@@ -160,6 +194,7 @@ export const styles = StyleSheet.create({
   unavailable: { alignItems: 'center', justifyContent: 'center', gap: 6, padding: 4 },
   empty: { alignItems: 'center', paddingVertical: 30, paddingHorizontal: 18, gap: 9 },
   emptyIcon: { height: 52, width: 52, borderRadius: 17, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
+  emptyMascot: { width: 88, height: 88 },
   emptyTitle: { color: color.ink, fontWeight: '700', fontSize: 16, textAlign: 'center' },
   centered: { textAlign: 'center' },
 });

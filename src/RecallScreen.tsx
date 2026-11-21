@@ -6,7 +6,7 @@ import {
   emptyRecallRequest, hasRecallRequest, parseRecallQuery, recallCategories, recallDateLabels, recallDateRange,
   type RecallPage, type RecallRequest, type RecallSearch, type RecallStatus,
 } from './recallQuery';
-import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, Icon, styles } from './ui';
+import { Body, Button, Chip, color, EmptyState, ErrorText, Heading, styles } from './ui';
 
 type Props = {
   revision: number;
@@ -14,7 +14,7 @@ type Props = {
   search: RecallSearch;
   status?: () => Promise<RecallStatus>;
   startBackfill?: () => void | Promise<unknown>;
-  voice?: (onTranscript: (text: string) => void) => ReactNode;
+  voice?: (onTranscript: (text: string) => void, deferPrompt: boolean) => ReactNode;
 };
 
 type Hit = RecallPage['items'][number];
@@ -34,6 +34,7 @@ export function RecallScreen({ revision, open, search, status, startBackfill, vo
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [index, setIndex] = useState<RecallStatus | null>(null);
+  const [typedSearchDone, setTypedSearchDone] = useState(false);
   const inFlight = useRef(false);
   const generation = useRef(0);
   const lastSubmitted = useRef('');
@@ -101,6 +102,7 @@ export function RecallScreen({ revision, open, search, status, startBackfill, vo
     Keyboard.dismiss();
     const changedText = query.trim() !== lastSubmitted.current;
     lastSubmitted.current = query.trim();
+    if (query.trim()) setTypedSearchDone(true);
     if (!changedText) {
       if (hasRequest) setRequest({ ...request });
       return;
@@ -140,9 +142,24 @@ export function RecallScreen({ revision, open, search, status, startBackfill, vo
     />
     <View style={styles.row}>
       <Button label="Search" run={submit} style={layout.grow} />
-      {voice?.(setQuery)}
-      <Button label={filtersOpen ? 'Hide filters' : 'Filters'} subtle run={() => setFiltersOpen(!filtersOpen)} />
+      <Button label={filtersOpen ? 'Hide filters' : 'Filters'} subtle icon="layers" run={() => setFiltersOpen(!filtersOpen)} />
     </View>
+    {voice?.(setQuery, !typedSearchDone)}
+    {!hasRequest && <View style={layout.suggestions}>
+      <Text style={layout.filterHeading}>Try searching for</Text>
+      <View style={styles.row}>
+        {(['receipts', 'screenshots', 'whiteboard', 'last month'] as const).map((hint) => (
+          <Chip key={hint} label={hint} run={() => {
+            setQuery(hint);
+            lastSubmitted.current = '';
+            setTypedSearchDone(true);
+            const parsed = parseRecallQuery(hint);
+            setPlace(parsed.place ?? '');
+            setRequest({ ...parsed, place: parsed.place });
+          }} />
+        ))}
+      </View>
+    </View>}
     {hasFilters && <View style={styles.row}>
       {request.category && <Chip label={request.category} selected run={() => setRequest({ ...request, category: null })} />}
       {request.date && <Chip label={request.date.label} selected run={() => setRequest({ ...request, date: null })} />}
@@ -206,8 +223,16 @@ export function RecallScreen({ revision, open, search, status, startBackfill, vo
     onEndReachedThreshold={0.4}
     onEndReached={() => { if (next !== null && !loadError) void loadPage(next); }}
     ListEmptyComponent={hasRequest && !loading && !loadError
-      ? <EmptyState icon="image" title="No matches" text="Try a different word from the photo or widen the search."
-        action={hasFilters ? <Button label="Clear filters" subtle run={clearFilters} /> : undefined} />
+      ? <EmptyState icon="image" mascot="thinking" title="No matches"
+        text={hasFilters
+          ? `No photos matched${request.category ? ` in ${request.category}` : ''}${request.terms ? ` for “${request.terms}”` : ''}. Clear a filter or try a broader word.`
+          : 'Try a different word from the photo, or browse a collection below.'}
+        action={<View style={styles.column}>
+          {hasFilters && <Button label={request.category ? `Clear ${request.category} filter` : 'Clear filters'}
+            subtle run={clearFilters} />}
+          {!!request.terms && !!request.category && <Button label="Search without category"
+            run={() => setRequest({ ...request, category: null, textOnly: false })} />}
+        </View>} />
       : undefined}
     ListFooterComponent={loading
       ? <ActivityIndicator accessibilityLabel="Searching photos" color={color.blue} />
@@ -236,6 +261,7 @@ const layout = StyleSheet.create({
   filters: { gap: 12, padding: 12, borderColor: color.rule, borderWidth: StyleSheet.hairlineWidth, borderRadius: 12 },
   filterHeading: { color: color.ink, fontSize: 15, fontWeight: '600' },
   collections: { gap: 8, paddingTop: 8 },
+  suggestions: { gap: 8 },
   result: { gap: 4, paddingBottom: 12 },
   evidence: { color: color.ink, fontSize: 14, lineHeight: 19 },
 });

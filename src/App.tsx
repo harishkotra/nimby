@@ -308,6 +308,7 @@ function Nimby() {
     patterns: () => navigate('Patterns'),
     parallel: () => navigate('Parallel'),
     evolve: () => navigate('Evolve'),
+    scan: () => void galleryAction('scan'),
   };
 
   const primary = tabs.some((tab) => tab.name === screen);
@@ -342,7 +343,7 @@ function Nimby() {
         browsing={browseReferences} toggleBrowse={() => setBrowseReferences((value) => !value)} search={links.recall} />}
       {screen === 'Recall' && <RecallScreen revision={revision} open={setDetail}
         search={searchWithFeedback} status={native!.memoryStatus} startBackfill={native!.requestMemoryBackfill}
-        voice={(onTranscript) => <VoiceSearch onTranscript={onTranscript} />} />}
+        voice={(onTranscript, deferPrompt) => <VoiceSearch onTranscript={onTranscript} deferPrompt={deferPrompt} />} />}
       {screen === 'PhotoMap' && <PhotoMapScreen revision={revision} open={setDetail} />}
       {screen === 'Connect' && <ConnectScreen revision={revision} open={setDetail} loadCandidates={loadCandidates}
         loadCorrections={loadCorrections} saveCorrections={saveCorrections} onCorrectionsChanged={changed} />}
@@ -364,16 +365,19 @@ function Nimby() {
         changed={changed} openPermissionSettings={showSettings} openArchive={() => navigate('Archive')}
         openScan={(id) => openReview('scan', null, id)}
         onResume={() => { setScan(native!.scanStatus()); navigate('Analysis'); }} />}
-      {screen === 'Archive' && <ArchiveScreen revision={revision} scanning={scanActive(scan)} changed={() => setRevision((value) => value + 1)} />}
+      {screen === 'Archive' && <ArchiveScreen revision={revision} scanning={scanActive(scan)}
+        changed={() => setRevision((value) => value + 1)} openDuplicates={() => navigate('Duplicates')} />}
     </View>
     <View style={layout.nav} accessibilityRole="tablist">
       {tabs.map(({ name, icon }) => {
         const active = selectedTab === name;
         return <Pressable key={name} accessibilityRole="tab" accessibilityLabel={name}
           accessibilityState={{ selected: active }} onPress={() => navigate(name)}
-          style={({ pressed }) => [layout.navItem, pressed && styles.faded]}>
+          style={({ pressed }) => [layout.navItem, pressed && styles.pressed]}>
           <View style={[layout.navIndicator, active && layout.navIndicatorActive]} />
-          <Icon name={icon} size={20} tint={active ? color.blue : color.muted} />
+          <View style={[layout.navIconWrap, active && layout.navIconActive]}>
+            <Icon name={icon} size={20} tint={active ? color.paper : color.muted} />
+          </View>
           <Text style={[layout.navText, active && layout.navTextActive]}>{name}</Text>
         </Pressable>;
       })}
@@ -438,11 +442,13 @@ const layout = StyleSheet.create({
   liveDot: { position: 'absolute', width: 7, height: 7, borderRadius: 4, backgroundColor: color.blue, top: 8, right: 10 },
   nav: { flexDirection: 'row', paddingHorizontal: 8, backgroundColor: color.paper,
     borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
-  navItem: { flex: 1, minHeight: 64, alignItems: 'center', paddingHorizontal: 2, paddingTop: 12, paddingBottom: 8, gap: 4 },
+  navItem: { flex: 1, minHeight: 72, alignItems: 'center', paddingHorizontal: 2, paddingTop: 10, paddingBottom: 8, gap: 4 },
   navIndicator: { position: 'absolute', top: 0, width: 20, height: 2, borderRadius: 1 },
   navIndicatorActive: { backgroundColor: color.blue },
+  navIconWrap: { width: 36, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  navIconActive: { backgroundColor: color.blue },
   navText: { color: color.muted, fontWeight: '500', fontSize: 12, textAlign: 'center' },
-  navTextActive: { color: color.blue },
+  navTextActive: { color: color.blue, fontWeight: '700' },
   progressCard: { backgroundColor: color.white, borderWidth: 1, borderColor: color.rule, borderRadius: 16, padding: 16, gap: 8 },
   progressNumber: { color: color.ink, fontVariant: ['tabular-nums'], fontSize: 34 },
   track: { height: 10, borderRadius: 20, backgroundColor: color.tint, overflow: 'hidden', marginVertical: 7 },

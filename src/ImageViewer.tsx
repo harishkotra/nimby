@@ -3,8 +3,9 @@ import { Keyboard, LayoutAnimation, Modal, Pressable, ScrollView, StyleSheet, Te
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { color, Icon, IconButton, styles, Thumbnail, useReducedMotion } from './ui';
 
-export function ImageViewer({ uri, label, album, close, children, footer, summary = 'Photo details' }: {
-  uri: string | null; label: string; album?: string | null; close: () => void; children?: ReactNode; summary?: string;
+export function ImageViewer({ uri, label, album, subtitle, close, children, footer, summary = 'Photo details' }: {
+  uri: string | null; label: string; album?: string | null; subtitle?: string | null;
+  close: () => void; children?: ReactNode; summary?: string;
   footer?: (openDetails: () => void) => ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -23,7 +24,10 @@ export function ImageViewer({ uri, label, album, close, children, footer, summar
     <SafeAreaView style={layout.shell}>
       <View style={layout.toolbar}>
         <IconButton icon="close" label="Close photo" run={close} style={layout.close} />
-        <Text style={layout.album} numberOfLines={1}>{album || 'Photo'}</Text>
+        <View style={layout.titleBlock}>
+          <Text style={layout.album} numberOfLines={1}>{album || 'Photo'}</Text>
+          {!!subtitle && <Text style={layout.subtitle} numberOfLines={1}>{subtitle}</Text>}
+        </View>
         <View style={layout.toolbarSpacer} />
       </View>
       <View style={layout.media} importantForAccessibility={expanded ? 'no-hide-descendants' : 'auto'}>
@@ -51,7 +55,9 @@ const layout = StyleSheet.create({
   shell: { flex: 1, backgroundColor: color.black },
   toolbar: { paddingHorizontal: 12, minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 8 },
   close: { backgroundColor: color.white },
-  album: { flex: 1, color: color.muted, fontSize: 13, textAlign: 'center' },
+  titleBlock: { flex: 1, alignItems: 'center', gap: 1 },
+  album: { color: color.ink, fontSize: 14, fontWeight: '600', textAlign: 'center' },
+  subtitle: { color: color.muted, fontSize: 12, textAlign: 'center' },
   toolbarSpacer: { width: 48 },
   media: { flex: 1, justifyContent: 'center' },
   image: { flex: 1, backgroundColor: color.black },

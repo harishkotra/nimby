@@ -44,19 +44,19 @@ function Group({ group, changed }: { group: DuplicateGroup; changed: () => void 
       <Heading>{group.similarity == null ? 'Exact copies' : 'Visual matches'}</Heading>
       <Body>{group.photos.length.toLocaleString()} photos</Body>
     </View>
-    <Body>{choosingKeeper ? 'Tap the photo you want to keep.' : 'Tap photos to select them for the archive. Hold to preview.'}</Body>
+    {choosingKeeper && <Body>Tap the photo you want to keep.</Body>}
     <FlatList horizontal data={group.photos} extraData={[keeper, selected, choosingKeeper]}
       keyExtractor={(photo) => photo.uri} contentContainerStyle={layout.strip} showsHorizontalScrollIndicator={false}
       renderItem={({ item: photo }) => {
         const isKeeper = photo.uri === kept.uri;
+        const isRecommended = photo.uri === recommended.uri;
         return <View style={layout.tile}>
-          <PhotoTile uri={photo.uri} label={`${photo.name}${isKeeper ? ', keeper' : ''}`}
+          <PhotoTile uri={photo.uri} label={`${photo.name}${isKeeper ? ', suggested keep' : ''}`}
             selected={choosingKeeper ? isKeeper : isKeeper ? undefined : selected.has(photo.uri)}
             press={() => tap(photo)} longPress={() => setPreview(photo)} />
           <Text style={[layout.caption, isKeeper && layout.accent]} numberOfLines={1}>
-            {isKeeper ? 'Keeping' : photo.uri === recommended.uri ? 'Recommended' : photo.album || 'Gallery'}
+            {isKeeper ? 'Suggested keep' : isRecommended ? 'Also strong' : photo.album || 'Gallery'}
           </Text>
-          {photo.keeper != null && <Body>{percent(photo.keeper)} keeper score</Body>}
         </View>;
       }} />
     <View style={styles.row}>
@@ -67,7 +67,7 @@ function Group({ group, changed }: { group: DuplicateGroup; changed: () => void 
       {!choosingKeeper && <Pressable accessibilityRole="button" style={styles.textAction}
         onPress={() => setSelected(allSelected ? new Set() : new Set(selectable.map((photo) => photo.uri)))}>
         <Text style={styles.link}>{allSelected ? 'Clear selection' : alternatives.length > maxArchiveSelection
-          ? `Select first ${maxArchiveSelection}` : 'Select alternatives'}</Text>
+          ? `Select first ${maxArchiveSelection}` : 'Archive the others'}</Text>
       </Pressable>}
     </View>
     {selected.size > 0 && !choosingKeeper && <Button icon="archive" label={`Archive ${selected.size.toLocaleString()}`}
@@ -75,7 +75,7 @@ function Group({ group, changed }: { group: DuplicateGroup; changed: () => void 
     {preview && <ImageViewer uri={preview.uri} label={preview.name} album={preview.album} close={() => setPreview(null)}>
       <Heading>{preview.name}</Heading>
       <Body>{preview.album} · {preview.bytes ? formatBytes(preview.bytes) : 'Size unavailable'}</Body>
-      {preview.uri === recommended.uri && <Body>Recommended keeper</Body>}
+      {preview.uri === recommended.uri && <Body>Suggested keep for this group</Body>}
       {preview.aesthetic != null && <Body>{percent(preview.aesthetic)} Eye aesthetic score</Body>}
       {preview.keeper != null && <Body>{percent(preview.keeper)} Eye keeper score</Body>}
     </ImageViewer>}
@@ -119,7 +119,7 @@ export function DuplicatesScreen({ revision, changed }: { revision: number; chan
     onEndReachedThreshold={0.5} onEndReached={() => { if (more && status === 'ready') void load(groups.length); }}
     ListHeaderComponent={<View style={styles.column}>
       <Heading large>Review duplicates</Heading>
-      <Body>Nimby suggests one keeper per group. You choose what to archive.</Body>
+      <Body>Nimby suggests one keep per group. Tap photos to archive the rest, or hold a photo to preview.</Body>
       {status === 'loading' && <Body>Checking indexed photos…</Body>}
       {status === 'error' && <ErrorText>Duplicate review could not be loaded.</ErrorText>}
     </View>}

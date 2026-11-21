@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform, View } from 'react-native';
-import { useDialog } from './Dialogs';
 import { native } from './gallery';
-import { Button, ErrorText, formatBytes, styles } from './ui';
+import { Body, Button, ErrorText, formatBytes, styles } from './ui';
 
-export function VoiceSearch({ onTranscript }: { onTranscript: (text: string) => void }) {
-  const show = useDialog();
+export function VoiceSearch({ onTranscript, deferPrompt = false }: {
+  onTranscript: (text: string) => void;
+  /** When true, skip the blocking download dialog until the user has searched by text once. */
+  deferPrompt?: boolean;
+}) {
   const [phase, setPhase] = useState<'idle' | 'installing' | 'recording' | 'transcribing'>('idle');
   const [error, setError] = useState('');
+  const [offerDownload, setOfferDownload] = useState(false);
+  const [packBytes, setPackBytes] = useState<number | null>(null);
   const version = useRef(0);
   const busy = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -44,6 +48,7 @@ export function VoiceSearch({ onTranscript }: { onTranscript: (text: string) => 
     busy.current = true;
     setPhase('installing');
     setError('');
+    setOfferDownload(false);
     try {
       await native.installVoice();
     } catch {
@@ -81,15 +86,18 @@ export function VoiceSearch({ onTranscript }: { onTranscript: (text: string) => 
     const attempt = ++version.current;
     busy.current = true;
     setError('');
+    setOfferDownload(false);
     try {
       const { ready, bytes } = await native.voiceStatus();
       if (version.current !== attempt) return;
       if (!ready) {
-        show({
-          title: 'Download English voice search?',
-          message: `${formatBytes(bytes)}. After download, transcription runs on your phone.`,
-          action: { label: 'Download voice pack', run: () => void install() },
-        });
+        setPackBytes(bytes);
+        if (deferPrompt) {
+          setError('Search once by typing first. Voice download will be ready afterward.');
+          setOfferDownload(false);
+        } else {
+          setOfferDownload(true);
+        }
         return;
       }
       const permission = PermissionsAndroid.PERMISSIONS.RECORD_AUDIO;
@@ -118,6 +126,13 @@ export function VoiceSearch({ onTranscript }: { onTranscript: (text: string) => 
   return <View style={styles.column}>
     <Button label={phase === 'installing' ? 'Downloading voice pack…' : phase === 'transcribing' ? 'Transcribing…' : 'Voice search'}
       subtle disabled={phase !== 'idle'} run={() => void start()} />
+    {offerDownload && <View style={styles.column}>
+      <Body>English voice search needs a one-time download{packBytes != null ? ` (${formatBytes(packBytes)})` : ''}. Transcription stays on this phone.</Body>
+      <View style={styles.row}>
+        <Button label="Download voice pack" run={() => void install()} />
+        <Button label="Not now" subtle run={() => { setOfferDownload(false); setError(''); }} />
+      </View>
+    </View>}
     {!!error && <ErrorText>{error}</ErrorText>}
   </View>;
 }

@@ -354,14 +354,17 @@ export function PhotoDetail({ item, close, changed, open }: {
       <Icon name="chevron" size={18} tint={color.muted} />
     </Pressable>;
 
-  return <ImageViewer uri={photo.uri} label={photo.name} album={photo.album} close={close}
+  return <ImageViewer uri={photo.uri} label={photo.name}
+    album={finding ?? photo.album}
+    subtitle={finding && photo.album ? photo.album : undefined}
+    close={close}
     summary={finding ? `Eye · ${finding}` : 'Photo notes'}
     footer={(openDetails) => <View style={styles.row}>
       {kept ? <View accessible accessibilityLabel="Kept" style={layout.kept}>
         <Icon name="check" size={18} tint={color.blue} /><Body>Kept</Body>
       </View> : <Button label={photo.decision === 'dismissed' ? 'Undo dismissal' : 'Keep'} icon="bookmark"
         disabled={busy} style={layout.fill} run={() => void decide(photo.decision === 'new' ? 'kept' : 'new')} />}
-      <Button label="More actions" subtle run={() => { setMoreActions(true); openDetails(); }} />
+      <Button label="Why / actions" subtle run={() => { setMoreActions(true); openDetails(); }} />
     </View>}>
     <View style={layout.notes}>
       <Text style={layout.noteLabel}>Identified by Eye</Text>
@@ -379,7 +382,7 @@ export function PhotoDetail({ item, close, changed, open }: {
       {photo.uri && detailRow('Archive photo', () => {
         if (photo.uri) confirmArchive([photo.uri], () => { changed(); close(); });
       }, busy)}
-      {photo.uri && detailRow('Open original', () => {
+      {photo.uri && detailRow('Open in Photos', () => {
         setError('');
         native?.openOriginal(photo.id, photo.sourceKey ?? null).catch((cause: unknown) => {
           setError(cause instanceof Error ? cause.message : 'This photo could not be opened.');

@@ -2,7 +2,10 @@ import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type DimensionValue } from 'react-native';
 import type { Feed, Overview, Result } from './gallery';
 import { PhotoTile } from './PhotoGrid';
-import { Body, Button, color, ErrorText, formatBytes, Heading, Icon, type IconName, percent, SectionTitle, styles } from './ui';
+import {
+  Body, Button, color, ErrorText, formatBytes, Heading, Icon, type IconName, isLowCoverage,
+  percent, SectionTitle, styles,
+} from './ui';
 
 const count = (n: number | null | undefined) => n == null ? '—' : n.toLocaleString();
 const measure = (n: number | null | undefined) => n == null ? '—' : formatBytes(n);
@@ -13,11 +16,12 @@ type Links = {
   gallery: () => void; duplicates: () => void; archive: () => void;
   discover: (mode: Feed, category?: string) => void; recall: () => void; photoMap: () => void;
   connect: () => void; patterns: () => void; parallel: () => void; evolve: () => void;
+  scan?: () => void;
 };
 
 function Action({ label, value, icon, run }: { label: string; value?: string; icon: IconName; run: () => void }) {
   return <Pressable accessibilityRole="button" onPress={run}
-    style={({ pressed }) => [layout.action, pressed && styles.faded]}>
+    style={({ pressed }) => [layout.action, pressed && styles.pressed]}>
     <View style={layout.actionIcon}><Icon name={icon} size={20} tint={color.blue} /></View>
     <View style={layout.actionText}><Text style={layout.actionName}>{label}</Text>{value && <Body>{value}</Body>}</View>
     <Icon name="chevron" size={16} tint={color.muted} />
@@ -58,6 +62,10 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
   const activity = data?.history.find((record) => record.finished != null);
   const photos = previews.filter((item) => item.uri).slice(0, 3);
   const reviewed = activity ? activity.analyzed + activity.cached : 0;
+  const early = isLowCoverage(data?.analyzed ?? data?.localAnalyzed, data?.accessible);
+  const coverage = data?.accessible == null ? null : ratio(data.analyzed, data.accessible);
+  const awaiting = data?.awaiting ?? (data?.accessible != null && data.analyzed != null
+    ? Math.max(0, data.accessible - data.analyzed) : null);
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={layout.intro}>
       <Heading large>Your gallery</Heading>
@@ -65,9 +73,30 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
         ? `${data.localAnalyzed.toLocaleString()} photos analyzed on this device`
         : 'Scan your photos to find receipts, screenshots, and other saved references.'}</Body>
     </View>
+    {data && (coverage != null || awaiting != null) && <Pressable accessibilityRole="button"
+      accessibilityLabel="Gallery coverage" onPress={early ? scan : links.recall}
+      style={({ pressed }) => [layout.coverageStrip, pressed && styles.pressed]}>
+      <View style={styles.between}>
+        <Text style={layout.stripTitle}>
+          {data.accessible != null
+            ? `${count(data.analyzed)} of ${count(data.accessible)} accessible`
+            : `${count(data.localAnalyzed)} analyzed`}
+        </Text>
+        <Text style={layout.stripPercent}>{coverage == null ? '—' : percent(coverage)}</Text>
+      </View>
+      <View style={layout.track}><View style={[layout.fill, { width: widthPercent(coverage ?? 0) }]} /></View>
+      <Body>{early
+        ? (awaiting ? `${count(awaiting)} still to scan · continue to unlock Search` : 'Scan more photos to unlock better search')
+        : (awaiting ? `${count(awaiting)} still to scan` : 'Gallery coverage')}</Body>
+    </Pressable>}
     <View style={layout.scanGroup}>
-      <Button label="Search photos" icon="search" run={links.recall} />
-      <Button label="Scan gallery" icon="scan" subtle run={scan} disabled={busy} />
+      {early ? <>
+        <Button label="Scan gallery" icon="scan" run={scan} disabled={busy} />
+        <Button label="Search photos" icon="search" subtle run={links.recall} />
+      </> : <>
+        <Button label="Search photos" icon="search" run={links.recall} />
+        <Button label="Scan gallery" icon="scan" subtle run={scan} disabled={busy} />
+      </>}
       <View style={layout.halves}>
         <Button label="Phone albums" subtle disabled={busy} run={links.gallery} style={layout.flex} />
         <Button label="Pick photos" subtle disabled={busy} run={pick} style={layout.flex} />
@@ -102,51 +131,26 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, recentE
 
 export function InsightsScreen({ data, error, ...links }: Links & { data: Overview | null; error: boolean }) {
   const [details, setDetails] = useState(false);
+  const [exploreOpen, setExploreOpen] = useState(false);
   const { width } = useWindowDimensions();
   const coverage = data?.accessible == null ? null : ratio(data.analyzed, data.accessible);
   const categories = data?.categories ?? [];
   const totalCategories = categories.reduce((sum, item) => sum + item.count, 0);
   const maximumStorage = Math.max(1, data?.duplicateBytes ?? 0, data?.lowQualityBytes ?? 0);
+  const early = isLowCoverage(data?.analyzed ?? data?.localAnalyzed, data?.accessible);
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
     <View style={layout.intro}><Heading large>Insights</Heading><Body>A closer look at what’s in your gallery.</Body></View>
     {error && <ErrorText>Could not read the latest gallery totals.</ErrorText>}
-    <View style={layout.section}>
-      <Heading>Explore your memories</Heading>
-      <Action icon="map" label="Photo Map" value="Explore where your photos were taken" run={links.photoMap} />
-      <Action icon="clock" label="Timeline" value="Browse related moments" run={links.connect} />
-      <Action icon="layers" label="Discover patterns" value="See themes that show up over time" run={links.patterns} />
-      <Action icon="chevron" label="Compare next steps" value="Make a plan from saved photos" run={links.parallel} />
-      <Action icon="check" label="Choices and outcomes" value="Remember what worked" run={links.evolve} />
-    </View>
     <View style={layout.coverage}>
       <CoverageRing value={coverage} size={Math.min(196, width * 0.50)} />
       <Text style={layout.chartTitle}>Gallery coverage</Text>
       {data?.accessible != null
-        ? <Text style={layout.caption}>{count(data.analyzed)} of {count(data.accessible)} accessible photos</Text>
+        ? <Text style={layout.coverageCount}>{count(data.analyzed)} of {count(data.accessible)}</Text>
         : <Body>{data ? 'Allow photo access to measure coverage.' : 'Reading gallery coverage…'}</Body>}
+      {data?.accessible != null && <Text style={layout.caption}>accessible photos analyzed</Text>}
       {data?.awaiting != null && <Text style={layout.insetLabel}>{count(data.awaiting)} still to scan</Text>}
+      {early && links.scan && <Button label="Continue scan" icon="scan" run={links.scan} style={layout.coverageAction} />}
       {data && data.accessible == null && <Button subtle label="Manage gallery access" run={links.gallery} />}
-    </View>
-    <View style={layout.section}>
-      <Heading>Saved categories</Heading>
-      {totalCategories > 0 ? <>
-        <View accessible accessibilityLabel={categories.map((item) => `${item.name}: ${item.count}`).join(', ')} style={layout.stack}>
-          {categories.map((item, index) => <View key={item.name} style={{ flex: item.count,
-            backgroundColor: chartPalette[index % chartPalette.length] }} />)}
-        </View>
-        <View style={layout.legend}>
-          {categories.map((item, index) => <Pressable key={item.name} accessibilityRole="button"
-            onPress={() => links.discover('recent', item.name)}
-            style={({ pressed }) => [layout.legendItem, pressed && styles.faded]}>
-            <View style={[layout.dot, { backgroundColor: chartPalette[index % chartPalette.length] }]} />
-            <Text style={layout.legendText}>{item.name}</Text><Text style={layout.legendCount}>{count(item.count)}</Text>
-          </Pressable>)}
-        </View>
-      </> : <Body>Category colors will appear as Eye finds photos worth revisiting.</Body>}
-      <Action icon="image" label="Screenshots" value={data?.screenshots == null ? undefined : `${count(data.screenshots)} detected`}
-        run={() => links.discover('screenshots')} />
-      <Action icon="bookmark" label="Worth Revisiting" value={data ? `${count(data.worth)} photos` : undefined}
-        run={() => links.discover('suggestions')} />
     </View>
     <View style={layout.section}>
       <Heading>Room to reclaim</Heading>
@@ -159,7 +163,7 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
           ['Duplicate groups', data?.duplicateBytes, color.blue, links.duplicates],
           ['Low-quality candidates', data?.lowQualityBytes, chartPalette[3], () => links.discover('quality')],
         ] as const).map(([label, bytes, tint, run]) => <Pressable key={label} onPress={run} accessibilityRole="button"
-          accessibilityLabel={`${label}, ${measure(bytes)}`} style={({ pressed }) => [layout.storageAction, pressed && styles.faded]}>
+          accessibilityLabel={`${label}, ${measure(bytes)}`} style={({ pressed }) => [layout.storageAction, pressed && styles.pressed]}>
           <View style={styles.between}><Text style={layout.actionName}>{label}</Text>
             <View style={styles.row}><Text style={layout.legendCount}>{measure(bytes)}</Text><Icon name="chevron" tint={color.muted} size={16} /></View>
           </View>
@@ -183,7 +187,42 @@ export function InsightsScreen({ data, error, ...links }: Links & { data: Overvi
         {!!data?.unknownSizes && <Body>{count(data.unknownSizes)} accessible photos have no reported file size.</Body>}
       </View>}
     </View>
-    <Action icon="archive" label="Archived photos" value={data ? `${count(data.archived)} in your archive` : undefined} run={links.archive} />
+    <View style={layout.section}>
+      <Heading>Saved categories</Heading>
+      {totalCategories > 0 ? <>
+        <View accessible accessibilityLabel={categories.map((item) => `${item.name}: ${item.count}`).join(', ')} style={layout.stack}>
+          {categories.map((item, index) => <View key={item.name} style={{ flex: item.count,
+            backgroundColor: chartPalette[index % chartPalette.length] }} />)}
+        </View>
+        <View style={layout.legend}>
+          {categories.map((item, index) => <Pressable key={item.name} accessibilityRole="button"
+            onPress={() => links.discover('recent', item.name)}
+            style={({ pressed }) => [layout.legendItem, pressed && styles.pressed]}>
+            <View style={[layout.dot, { backgroundColor: chartPalette[index % chartPalette.length] }]} />
+            <Text style={layout.legendText}>{item.name}</Text><Text style={layout.legendCount}>{count(item.count)}</Text>
+          </Pressable>)}
+        </View>
+      </> : <Body>Category colors will appear as Eye finds photos worth revisiting.</Body>}
+      <Action icon="image" label="Screenshots" value={data?.screenshots == null ? undefined : `${count(data.screenshots)} detected`}
+        run={() => links.discover('screenshots')} />
+      <Action icon="bookmark" label="Worth Revisiting" value={data ? `${count(data.worth)} photos` : undefined}
+        run={() => links.discover('suggestions')} />
+      <Action icon="archive" label="Archived photos" value={data ? `${count(data.archived)} in your archive` : undefined} run={links.archive} />
+    </View>
+    <View style={layout.section}>
+      <Pressable accessibilityRole="button" accessibilityState={{ expanded: exploreOpen }}
+        onPress={() => setExploreOpen(!exploreOpen)} style={({ pressed }) => [layout.exploreToggle, pressed && styles.pressed]}>
+        <Heading>Explore</Heading>
+        <Icon name={exploreOpen ? 'up' : 'down'} size={18} tint={color.muted} />
+      </Pressable>
+      {exploreOpen && <>
+        <Action icon="map" label="Photo Map" value="Explore where your photos were taken" run={links.photoMap} />
+        <Action icon="clock" label="Timeline" value="Browse related moments" run={links.connect} />
+        <Action icon="layers" label="Discover patterns" value="See themes that show up over time" run={links.patterns} />
+        <Action icon="chevron" label="Compare next steps" value="Make a plan from saved photos" run={links.parallel} />
+        <Action icon="check" label="Choices and outcomes" value="Remember what worked" run={links.evolve} />
+      </>}
+    </View>
   </ScrollView>;
 }
 
@@ -200,7 +239,12 @@ const layout = StyleSheet.create({
   actionIcon: { width: 40, height: 40, borderRadius: 12, backgroundColor: color.tint, alignItems: 'center', justifyContent: 'center' },
   actionText: { flex: 1, gap: 2 },
   actionName: { color: color.ink, fontWeight: '600', fontSize: 15, flexShrink: 1 },
+  coverageStrip: { backgroundColor: color.white, borderRadius: 16, padding: 14, gap: 8 },
+  stripTitle: { color: color.ink, fontWeight: '600', fontSize: 14, flexShrink: 1 },
+  stripPercent: { color: color.blue, fontWeight: '700', fontSize: 14, fontVariant: ['tabular-nums'] },
   coverage: { alignItems: 'center', justifyContent: 'center', paddingVertical: 16, gap: 8 },
+  coverageAction: { alignSelf: 'stretch', marginTop: 4 },
+  coverageCount: { color: color.ink, fontSize: 22, fontWeight: '600', letterSpacing: -0.6, fontVariant: ['tabular-nums'], textAlign: 'center' },
   ring: { overflow: 'hidden', backgroundColor: color.tint, marginBottom: 10 },
   ringCenter: { position: 'absolute', backgroundColor: color.paper, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, gap: 0 },
   ringValue: { color: color.ink, fontWeight: '600', letterSpacing: -1.6, fontVariant: ['tabular-nums'], maxWidth: '100%' },
@@ -219,4 +263,5 @@ const layout = StyleSheet.create({
   fill: { height: '100%', borderRadius: 8 },
   details: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, paddingBottom: 6 },
   detail: { flexBasis: '47%', flexGrow: 1, gap: 2 },
+  exploreToggle: { minHeight: 48, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
 });
