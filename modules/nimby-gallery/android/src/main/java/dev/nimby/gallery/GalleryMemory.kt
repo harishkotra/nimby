@@ -25,7 +25,7 @@ internal fun lowQuality(tags: JSONObject?): Boolean =
 internal data class ArchivedPhoto(val uri: String, val name: String, val album: String,
     val bytes: Long, val version: String, val archived: Long, val eligible: Long)
 internal class GalleryMemory(context: Context, private val gallery: GallerySource) :
-    SQLiteOpenHelper(context, "nimby-gallery.db", null, 6) {
+    SQLiteOpenHelper(context, "nimby-gallery.db", null, 7) {
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -57,6 +57,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         addInsightColumns(db)
         addScanScope(db)
         createScanResults(db)
+        createMemorySchema(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -85,6 +86,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         }
         if (oldVersion < 5) addScanScope(db)
         if (oldVersion < 6) createScanResults(db)
+        if (oldVersion < 7) createMemorySchema(db)
     }
 
     private fun createScanResults(db: SQLiteDatabase) {
@@ -528,6 +530,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                 db.execSQL("""UPDATE images SET status='pending', error=NULL, engine=NULL, result=NULL,
                     kind=NULL, confidence=NULL, tags=NULL, category=NULL, embedding=NULL, analyzed=0,
                     low_quality=0, keeper=NULL, aesthetic=NULL, linked=0""")
+                db.execSQL("UPDATE memory_details SET ocr_text = NULL WHERE ocr_text IS NOT NULL")
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -656,6 +659,235 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             }
         )
     }
+
+    fun searchMemory(query: String, category: String?, start: Long?, end: Long?, place: String?, collection: String?,
+                     textOnly: Boolean, offset: Int): Map<String, Any?> {
+        val match = recallMatch(query)
+        if (query.isNotBlank() && match == null) return mapOf("items" to emptyList<Any>(), "next" to null)
+        val filters = mutableListOf("images.status = 'complete'", "images.decision != 'dismissed'", visible)
+        val args = mutableListOf<String>()
+        if (match != null) {
+            filters.add("memory_search MATCH ?")
+            args.add(match.expression)
+        }
+        if (category != null) {
+            filters.add("$reviewCategory = ? COLLATE NOCASE")
+            args.add(category)
+        }
+        if (place != null) {
+            filters.add("details.place = ? COLLATE NOCASE")
+            args.add(place)
+        }
+        if (collection != null) {
+            filters.add("images.collection = ? COLLATE NOCASE")
+            args.add(collection)
+        }
+        if (textOnly) filters.add("length(details.ocr_text) > 0")
+        if (start != null || end != null) {
+            val dateFilter = capturedFilter("dated", start, end)
+            filters.add("""EXISTS (SELECT 1 FROM sources dated WHERE dated.image_id = images.id ${dateFilter.first}
+                AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = dated.uri))""")
+            args.addAll(dateFilter.second)
+        }
+        val sort = if (match != null) {
+            args.addAll(listOf(match.phrase, match.phrase))
+            """CASE WHEN instr(lower(details.ocr_text), ?) > 0 THEN 0
+                WHEN instr(lower(memory_search.labels), ?) > 0 THEN 1 ELSE 2 END,"""
+        } else ""
+        val from = if (match == null) "FROM images" else "FROM memory_search JOIN images ON images.id = memory_search.docid"
+        val safeOffset = offset.coerceAtLeast(0)
+        val items = mutableListOf<Map<String, Any?>>()
+        var next: Int? = null
+        readableDatabase.rawQuery("""SELECT images.id, images.kind, images.confidence, images.tags,
+                $reviewCategory, images.decision, images.collection, details.ocr_text, details.place
+            $from LEFT JOIN memory_details details ON details.image_id = images.id
+            WHERE ${filters.joinToString(" AND ")}
+            ORDER BY $sort images.analyzed DESC, images.id DESC LIMIT 257 OFFSET $safeOffset""",
+            args.toTypedArray()).use { row ->
+            var visited = 0
+            while (row.moveToNext()) {
+                if (items.size == 24 || visited == 256) {
+                    next = safeOffset + visited
+                    break
+                }
+                visited++
+                val id = row.getLong(0)
+                val source = memorySource(id, start, end) ?: continue
+                val tags = row.getString(3) ?: "[]"
+                val photo = entry(id, row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) }, tags,
+                    row.getString(4), row.getString(5), row.getString(6), source.first)
+                val evidence = buildList {
+                    val text = row.getString(7)
+                    if (match != null && !text.isNullOrBlank()) {
+                        val normalized = text.replace(Regex("\\s+"), " ")
+                        val position = normalized.indexOf(match.phrase, ignoreCase = true).takeIf { it >= 0 }
+                            ?: match.terms.firstNotNullOfOrNull { term ->
+                                normalized.indexOf(term, ignoreCase = true).takeIf { it >= 0 }
+                            }
+                        if (position != null) add("Photo text: " + normalized
+                            .substring((position - 22).coerceAtLeast(0), (position + 68).coerceAtMost(normalized.length)))
+                        else if (textOnly) add("Searchable text")
+                    } else if (textOnly) add("Searchable text")
+                    if (match != null && tags != "[]") {
+                        val labels = JSONArray(tags)
+                        val matchedTag = (0 until labels.length()).map { index ->
+                            labels.getJSONObject(index).getString("label").replace('_', ' ')
+                        }.firstOrNull { label -> match.terms.any { label.contains(it, ignoreCase = true) } }
+                        if (matchedTag != null) add("Eye tag: $matchedTag")
+                    }
+                    if (row.getString(4) != "Other") add("Eye category: ${row.getString(4)}")
+                    row.getString(8)?.let { add("Place: $it") }
+                    row.getString(6)?.let { add("Collection: $it") }
+                }.take(3)
+                items.add(mapOf("photo" to photo + ("sourceKey" to source.first.first.toString()),
+                    "captured" to source.second, "place" to row.getString(8), "evidence" to evidence))
+            }
+        }
+        return mapOf("items" to items, "next" to next)
+    }
+
+    private fun memorySource(id: Long, start: Long? = null, end: Long? = null): Pair<Triple<Uri, String, String>, Long?>? {
+        val dates = capturedFilter("sources", start, end)
+        return readableDatabase.rawQuery("""SELECT uri, name, album, captured FROM sources
+            WHERE image_id = ? ${dates.first} AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = sources.uri)
+            ORDER BY source, captured DESC, uri""", arrayOf(id.toString(), *dates.second)).use { row ->
+            while (row.moveToNext()) {
+                val uri = Uri.parse(row.getString(0))
+                if (gallery.readable(uri)) return@use Triple(uri, row.getString(1), row.getString(2)) to
+                    row.getLong(3).takeIf { it > 0 }
+            }
+            null
+        }
+    }
+
+    private fun capturedFilter(alias: String, start: Long?, end: Long?): Pair<String, Array<String>> {
+        val sql = StringBuilder()
+        val args = mutableListOf<String>()
+        if (start != null || end != null) sql.append(" AND $alias.captured > 0")
+        if (start != null) {
+            sql.append(" AND $alias.captured >= ?")
+            args.add(start.toString())
+        }
+        if (end != null) {
+            sql.append(" AND $alias.captured < ?")
+            args.add(end.toString())
+        }
+        return sql.toString() to args.toTypedArray()
+    }
+
+    fun memoryPlace(imageId: String): String? = readableDatabase.rawQuery(
+        "SELECT place FROM memory_details WHERE image_id = ?", arrayOf(imageId)
+    ).use { row -> if (row.moveToFirst()) row.getString(0) else null }
+
+    fun setMemoryPlace(imageId: String, place: String?) {
+        val id = imageId.toLong()
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            db.execSQL("INSERT OR IGNORE INTO memory_details(image_id) SELECT id FROM images WHERE id = ?", arrayOf(id))
+            db.update("memory_details", ContentValues().apply { put("place", place?.trim()?.take(80)?.ifEmpty { null }) },
+                "image_id = ?", arrayOf(id.toString()))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    private val pendingOcr = """FROM images LEFT JOIN memory_details details ON details.image_id = images.id
+        WHERE images.status = 'complete' AND images.decision != 'dismissed' AND $OCR_ELIGIBLE
+        AND details.ocr_text IS NULL AND $visible""".trimIndent()
+
+    fun pendingOcrCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) $pendingOcr", null)
+        .use { row -> row.moveToFirst(); row.getInt(0) }
+
+    fun pendingOcrPage(after: Long): List<PendingOcr> = readableDatabase.rawQuery(
+        """SELECT images.id, images.fingerprint $pendingOcr AND images.id > ? ORDER BY images.id LIMIT 24""",
+        arrayOf(after.toString())
+    ).use { row -> buildList {
+        while (row.moveToNext()) add(PendingOcr(row.getLong(0), row.getString(1)))
+    } }
+
+    fun saveOcr(target: PendingOcr, text: String) {
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val args = arrayOf(target.id.toString(), target.fingerprint)
+            db.execSQL("""INSERT OR IGNORE INTO memory_details(image_id)
+                SELECT id FROM images WHERE id = ? AND fingerprint = ? AND status = 'complete'""", args)
+            db.update("memory_details", ContentValues().apply { put("ocr_text", text.trim().take(12_000)) },
+                """image_id = ? AND EXISTS (SELECT 1 FROM images WHERE id = memory_details.image_id
+                    AND fingerprint = ? AND status = 'complete')""", args)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    private val pendingLocation = """FROM sources s JOIN images i ON i.id = s.image_id
+        LEFT JOIN photo_locations g ON g.uri = s.uri AND g.version = s.version
+        WHERE i.status = 'complete' AND i.decision != 'dismissed' AND g.uri IS NULL
+        AND NOT EXISTS (SELECT 1 FROM archive a WHERE a.uri = s.uri)""".trimIndent()
+
+    fun pendingLocationPage(after: Long): List<PendingLocation> = readableDatabase.rawQuery(
+        """SELECT s.uri, s.version, s.rowid $pendingLocation AND s.rowid > ? ORDER BY s.rowid LIMIT 24""",
+        arrayOf(after.toString())
+    ).use { row -> buildList {
+        while (row.moveToNext()) add(PendingLocation(Uri.parse(row.getString(0)), row.getString(1), row.getLong(2)))
+    } }
+
+    fun pendingLocationCount(): Int = readableDatabase.rawQuery("SELECT COUNT(*) $pendingLocation", null)
+        .use { row -> row.moveToFirst(); row.getInt(0) }
+
+    fun locationProcessed(uri: Uri, version: String): Boolean = readableDatabase.rawQuery(
+        "SELECT 1 FROM photo_locations WHERE uri = ? AND version = ?", arrayOf(uri.toString(), version)
+    ).use { it.moveToFirst() }
+
+    fun savePhotoLocation(uri: Uri, version: String, coordinates: PhotoCoordinates?) {
+        writableDatabase.execSQL("""INSERT OR REPLACE INTO photo_locations(uri, version, latitude, longitude)
+            SELECT uri, version, ?, ? FROM sources WHERE uri = ? AND version = ? AND image_id IS NOT NULL""",
+            arrayOf<Any?>(coordinates?.latitude, coordinates?.longitude, uri.toString(), version))
+    }
+
+    fun clearPhotoLocations() {
+        writableDatabase.delete("photo_locations", null, null)
+    }
+
+    fun forEachMapPhoto(south: Double, west: Double, north: Double, east: Double,
+                        start: Long?, end: Long?, visit: (MapPhoto) -> Boolean) {
+        require(south in -90.0..90.0 && north in south..90.0 && west in -180.0..180.0 && east in -180.0..180.0)
+        val longitudes = if (west <= east) "g.longitude BETWEEN ? AND ?" else "(g.longitude >= ? OR g.longitude <= ?)"
+        val dates = capturedFilter("s", start, end)
+        readableDatabase.rawQuery("""SELECT i.id, s.uri, s.name, s.album, g.latitude, g.longitude, s.captured
+            FROM photo_locations g JOIN sources s ON s.uri = g.uri AND s.version = g.version
+            JOIN images i ON i.id = s.image_id
+            WHERE g.latitude BETWEEN ? AND ? AND $longitudes AND i.status = 'complete' AND i.decision != 'dismissed'
+            AND NOT EXISTS (SELECT 1 FROM archive a WHERE a.uri = s.uri) ${dates.first}
+            ORDER BY s.captured DESC, s.uri""",
+            arrayOf(south.toString(), north.toString(), west.toString(), east.toString(), *dates.second)).use { row ->
+            while (row.moveToNext()) {
+                val uri = row.getString(1)
+                if (!gallery.readable(Uri.parse(uri))) continue
+                if (!visit(MapPhoto(row.getLong(0).toString(), uri, row.getString(2), row.getString(3), row.getDouble(4),
+                    row.getDouble(5), row.getLong(6).takeIf { it > 0 }))) break
+            }
+        }
+    }
+
+    fun mapPhotoResult(photo: MapPhoto): Map<String, Any?>? = readableDatabase.rawQuery("""
+        SELECT i.id, i.kind, i.confidence, i.tags, i.category, i.decision, i.collection, s.name, s.album
+        FROM images i JOIN sources s ON s.image_id = i.id
+        JOIN photo_locations g ON g.uri = s.uri AND g.version = s.version
+        WHERE i.id = ? AND s.uri = ? AND g.latitude IS NOT NULL AND i.status = 'complete' AND i.decision != 'dismissed'
+        AND NOT EXISTS (SELECT 1 FROM archive a WHERE a.uri = s.uri)""", arrayOf(photo.id, photo.uri)).use { row ->
+        val uri = Uri.parse(photo.uri)
+        if (!row.moveToFirst() || !gallery.readable(uri)) return@use null
+        entry(row.getLong(0), row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) }, row.getString(3) ?: "[]",
+            row.getString(4), row.getString(5), row.getString(6), Triple(uri, row.getString(7), row.getString(8))) +
+            ("sourceKey" to photo.uri)
+    }
+
+    fun mappedLocationCount(): Int = readableDatabase.rawQuery("""SELECT COUNT(*)
+        FROM photo_locations g JOIN sources s ON s.uri = g.uri AND s.version = g.version
+        JOIN images i ON i.id = s.image_id
+        WHERE g.latitude IS NOT NULL AND i.status = 'complete' AND i.decision != 'dismissed'
+        AND NOT EXISTS (SELECT 1 FROM archive a WHERE a.uri = s.uri)""", null)
+        .use { row -> row.moveToFirst(); row.getInt(0) }
 
     private val reviewCategory = """COALESCE(images.category, CASE images.kind
         WHEN 'screenshot' THEN 'Screenshots' WHEN 'photo' THEN 'Photos'

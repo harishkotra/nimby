@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.yield
 import java.io.IOException
 import java.io.File
 import java.security.MessageDigest
@@ -37,7 +39,12 @@ internal data class ScanProgress(
 internal class ScanWorker(private val context: Context, private val gallery: GallerySource,
                           private val memory: GalleryMemory) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var task: Job? = null
+    @Volatile private var task: Job? = null
+    @Volatile private var metadataTask: Job? = null
+    @Volatile private var ocrRunning = false
+    @Volatile private var locating = false
+    private val locationLock = Any()
+    private val locationPreferences = context.getSharedPreferences("photo-locations", Context.MODE_PRIVATE)
     private val paused = MutableStateFlow(false)
     private val progress = MutableStateFlow(ScanProgress())
     @Volatile private var eyeLoaded = false
@@ -78,6 +85,125 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
         )
     }
 
+    fun photoLocationsAvailable(): Boolean =
+        locationPreferences.getBoolean("enabled", false) && hasPhotoLocationPermission(context)
+
+    fun photoLocationStatus(): Map<String, Any?> {
+        val enabled = locationPreferences.getBoolean("enabled", false)
+        val permission = hasPhotoLocationPermission(context)
+        if (enabled && !permission) clearPhotoLocations()
+        val available = enabled && permission
+        return mapOf(
+            "enabled" to available,
+            "permission" to permission,
+            "pending" to if (available) memory.pendingLocationCount() else 0,
+            "mapped" to if (available) memory.mappedLocationCount() else 0,
+            "running" to (available && (locating || task?.isCompleted == false))
+        )
+    }
+
+    fun setPhotoLocationsEnabled(enabled: Boolean) {
+        if (!enabled) {
+            clearPhotoLocations()
+            return
+        }
+        check(hasPhotoLocationPermission(context)) { "Allow access to photo locations first." }
+        synchronized(locationLock) {
+            locationPreferences.edit().putBoolean("enabled", true).apply()
+        }
+        restartMetadataForLocations()
+    }
+
+    @Synchronized
+    private fun restartMetadataForLocations() {
+        val current = metadataTask
+        if (current?.isCompleted == false) {
+            current.cancel()
+            current.invokeOnCompletion { requestMemoryBackfill() }
+        } else {
+            requestMemoryBackfill()
+        }
+    }
+
+    fun clearPhotoLocations() {
+        synchronized(locationLock) {
+            locationPreferences.edit().putBoolean("enabled", false).apply()
+            memory.clearPhotoLocations()
+        }
+    }
+
+    fun memoryStatus(): Map<String, Any?> = mapOf(
+        "pending" to memory.pendingOcrCount(),
+        "running" to ocrRunning
+    )
+
+    @Synchronized
+    fun requestMemoryBackfill() {
+        if (task?.isCompleted == false || metadataTask?.isCompleted == false) return
+        metadataTask = scope.launch {
+            try {
+                var locationAfter = 0L
+                if (!photoLocationsAvailable() && locationPreferences.getBoolean("enabled", false)) clearPhotoLocations()
+                if (photoLocationsAvailable()) {
+                    locating = true
+                    while (photoLocationsAvailable()) {
+                        val page = memory.pendingLocationPage(locationAfter)
+                        if (page.isEmpty()) break
+                        for (target in page) {
+                            currentCoroutineContext().ensureActive()
+                            indexPhotoLocation(target.uri, target.version)
+                            yield()
+                        }
+                        locationAfter = page.last().after
+                    }
+                    locating = false
+                }
+                if (memory.pendingOcrCount() == 0) return@launch
+                ocrRunning = true
+                ReceiptOcr(context).use { ocr ->
+                    var after = 0L
+                    while (true) {
+                        val page = memory.pendingOcrPage(after)
+                        if (page.isEmpty()) break
+                        for (target in page) {
+                            currentCoroutineContext().ensureActive()
+                            val uri = memory.available(target.id) ?: continue
+                            val text = ocr.recognize(uri)
+                            currentCoroutineContext().ensureActive()
+                            if (text != null) memory.saveOcr(target, text)
+                            yield()
+                        }
+                        after = page.last().id
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                Log.w("NimbyMemory", "Local metadata indexing stopped; remaining photos can be retried.")
+            } catch (_: LinkageError) {
+                Log.w("NimbyMemory", "The local text recognizer could not be loaded.")
+            } finally {
+                locating = false
+                ocrRunning = false
+            }
+        }
+    }
+
+    private suspend fun indexPhotoLocation(uri: Uri, version: String) {
+        if (!photoLocationsAvailable() || memory.locationProcessed(uri, version) || !gallery.readable(uri)) return
+        val location = try {
+            readPhotoCoordinates(context, uri)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            return
+        }
+        currentCoroutineContext().ensureActive()
+        synchronized(locationLock) {
+            if (photoLocationsAvailable()) memory.savePhotoLocation(uri, version, location)
+        }
+    }
+
     fun processing() = memory.processing(currentScanId)
     fun overview() = memory.overview(currentScanId)
     @Synchronized fun resumeInterrupted() {
@@ -90,6 +216,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
     @Synchronized
     fun clearAnalysis(all: Boolean) {
         check(task?.isCompleted != false && eyeCheck.phase != "running") { "Finish the scan or model check first." }
+        metadataTask?.cancel()
         memory.clearAnalysis(all)
     }
 
@@ -155,7 +282,15 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
         paused.value = false
         runtimeError = null
         progress.value = ScanProgress(runId = progress.value.runId + 1, phase = "preparing")
-        task = scope.launch { scan(buckets.distinct(), uris.distinct()) }
+        val metadata = metadataTask
+        metadata?.cancel()
+        val current = scope.launch(start = CoroutineStart.LAZY) {
+            metadata?.join()
+            scan(buckets.distinct(), uris.distinct())
+        }
+        task = current
+        current.invokeOnCompletion { requestMemoryBackfill() }
+        current.start()
     }
 
     @Synchronized
@@ -219,6 +354,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                     if (id == null) id = memory.attach(photo, fingerprint(uri))
                     if (memory.isCached(id)) {
                         if (!gallery.readable(uri)) throw IOException("Photo access has changed.")
+                        indexPhotoLocation(uri, photo.version)
                         memory.clearSourceError(uri)
                         memory.recordScanResults(historyId, listOf(uri.toString()))
                         progress.update { it.copy(processed = it.processed + 1, cached = it.cached + 1) }
@@ -242,6 +378,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                     } finally {
                         bitmap.recycle()
                     }
+                    indexPhotoLocation(uri, photo.version)
                     memory.clearSourceError(uri)
                     memory.recordScanResults(historyId, listOf(uri.toString()))
                     progress.update { it.copy(processed = it.processed + 1, analyzed = it.analyzed + 1) }
@@ -295,6 +432,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                             if (photo.uri.toString() in cached) {
                                 paused.first { !it }
                                 currentCoroutineContext().ensureActive()
+                                indexPhotoLocation(photo.uri, photo.version)
                                 reused.add(photo.uri.toString())
                                 progress.update { it.copy(processed = it.processed + 1, cached = it.cached + 1) }
                                 if (progress.value.processed % 12 == 0) memory.saveScan(historyId, progress.value, false)
