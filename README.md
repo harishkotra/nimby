@@ -8,7 +8,7 @@ Your camera roll has become a junk drawer. The receipt you need, the product scr
 
 Nimby turns your Android gallery into searchable memory. Desert Ant Labs Eye understands what’s in a photo. Local OCR reads the words. Search brings back the original photo and shows why it matched. The analysis happens on your phone.
 
-[![Get Beta Access](https://shields.io)](https://production.d3ulvfvvudr0cr.amplifyapp.com/)
+[![Get  - Beta Access](https://img.shields.io/static/v1?label=Get+&message=Beta+Access&color=2ea44f)](https://production.d3ulvfvvudr0cr.amplifyapp.com/)
 
 [Early signal](#early-signal) · [Architecture](#architecture) · [Run on Android](#run-on-android)
 
