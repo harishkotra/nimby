@@ -8,6 +8,8 @@ Your camera roll has become a junk drawer. The receipt you need, the product scr
 
 Nimby turns your Android gallery into searchable memory. Desert Ant Labs Eye understands what’s in a photo. Local OCR reads the words. Search brings back the original photo and shows why it matched. The analysis happens on your phone.
 
+[![Get Beta Access](https://shields.io)](https://production.d3ulvfvvudr0cr.amplifyapp.com/)
+
 [Early signal](#early-signal) · [Architecture](#architecture) · [Run on Android](#run-on-android)
 
 ## From gallery search to personal intelligence
@@ -83,3 +85,6 @@ For local development, set `TAVILY_API_KEY` and `EXPO_PUBLIC_PRODUCT_SEARCH_URL=
 npm run typecheck
 node --test tests/*.test.mjs
 ```
+
+<img width="1672" height="941" alt="Nimby_ Your Private Photo Agent" src="https://github.com/user-attachments/assets/45b2c275-ce88-4c56-b326-e8ddc5c9bb27" />
+
