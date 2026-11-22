@@ -8,17 +8,7 @@ Your camera roll has become a junk drawer. The receipt you need, the product scr
 
 Nimby turns your Android gallery into searchable memory. Desert Ant Labs Eye understands what’s in a photo. Local OCR reads the words. Search brings back the original photo and shows why it matched. The analysis happens on your phone.
 
-[Demo](#demo) · [Early signal](#early-signal) · [Architecture](#architecture) · [Run on Android](#run-on-android)
-
-## Demo
-
-*About 45 seconds on scrcpy.* Open Home with around 40 photos already scanned, including a few receipts, product screenshots, and travel photos.
-
-1. **Search** for a distinctive word you remember seeing in one image, such as a store name on a receipt.
-2. **Show the match.** The original photo comes back with evidence like **Photo text** or **Eye category** right below it.
-3. **Keep it.** Open the photo and tap **Keep**. Nimby remembers the decision on your phone.
-
-Use a word you’ve rehearsed on that phone. If there’s time, open a pick in **Daily discoveries** or jump to a geotagged trip on **Photo Map**.
+[Early signal](#early-signal) · [Architecture](#architecture) · [Run on Android](#run-on-android)
 
 ## From gallery search to personal intelligence
 
@@ -30,7 +20,7 @@ Next, we’re hardening search on real galleries, moving web license unlocks tow
 
 ## Early signal
 
-A friends-and-family share brought **38 landing-page visits and 27 waitlist signups** (~71%). **21 of the signups said they’d pay.** Interest spanned limited free access, ₹149/month, and ₹2,500 lifetime.
+A friends-and-family share brought **38 landing-page visits and 27 waitlist signups** (~71%). **21 of the signups said they’d pay.** Interest spanned limited free access, ₹199/month, and ₹1,999 lifetime.
 
 We’re exploring Free, Plus, and Lifetime. The preview has a sandbox web checkout and license-key flow. Privacy controls and Archive are available without a license. [Landing and checkout setup](landing/README.md)
 
