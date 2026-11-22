@@ -1,7 +1,7 @@
 import { ActionSheet } from './ActionSheet';
 import { VoiceSearch } from './VoiceSearch';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Keyboard, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Keyboard, StyleSheet, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { native, type Result } from './gallery';
 import { ReferenceSearchSheet } from './ReferenceSearchSheet';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
@@ -9,7 +9,7 @@ import {
   emptyRecallRequest, hasRecallRequest, parseRecallQuery, recallCategories, recallDateLabels, recallDateRange,
   type RecallPage, type RecallRequest, type RecallSearch, type RecallStatus, type VisualSearchOptions,
 } from './recallQuery';
-import { ActionLink, Body, Button, IconButton, Chip, color, EmptyState, ErrorText, Heading, styles } from './ui';
+import { ActionLink, Body, Button, IconButton, Chip, color, EmptyState, ErrorText, Heading, styles, titleCase } from './ui';
 
 type Props = {
   revision: number;
@@ -27,6 +27,7 @@ type Hit = RecallPage['items'][number];
 const sourceNames = { gallery: 'Phone gallery', picker: 'Manually selected photos' } as const;
 
 export function RecallScreen({ revision, open, active, indexed, scan, openMap, search, status, startBackfill }: Props) {
+  const largeText = useWindowDimensions().fontScale >= 1.5;
   const [query, setQuery] = useState('');
   const [places, setPlaces] = useState<string[]>([]);
   const [reference, setReference] = useState<{ uri: string; scope: VisualSearchOptions; scopeLabel: string } | null>(null);
@@ -274,8 +275,11 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
       ? <ActivityIndicator accessibilityLabel="Searching photos" color={color.blue} />
       : loadError ? <Button label="Try again" subtle run={() => void loadPage(next ?? 0)} /> : undefined}
     renderTile={({ photo, captured, evidence, place: savedPlace }) => {
+      const category = photo.category && photo.category !== 'Other' ? photo.category : null;
+      const kind = photo.kind ? titleCase(photo.kind) : null;
+      const date = captured ? new Date(captured) : null;
       const details = [
-        captured ? new Date(captured).toLocaleDateString() : null,
+        date?.toLocaleDateString(),
         savedPlace,
       ].filter(Boolean).join(' · ');
       const reasons = (evidence.length ? evidence : [
@@ -283,11 +287,14 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
         details || photo.name,
       ].filter(Boolean) as string[]).slice(0, 2);
       const reason = reasons.join(' · ');
+      const label = [category || kind || photo.name || 'Photo', date?.toLocaleDateString(undefined, { dateStyle: 'long' }),
+        photo.album, savedPlace].filter(Boolean).join(', ');
       return <View style={layout.result}>
-        <PhotoTile uri={photo.uri} label={`${photo.name}. ${reason}${details ? `. ${details}` : ''}`} ratio={1.1}
+        <PhotoTile uri={photo.uri} label={label} ratio={1.1}
           press={() => open(photo)} />
-        <Text style={layout.evidence} numberOfLines={3}>{reason}</Text>
-        {!!details && !reasons.includes(details) && <Text style={styles.body} numberOfLines={1}>{details}</Text>}
+        <Text style={layout.evidence} numberOfLines={largeText ? 4 : 3}>{reason}</Text>
+        {!!details && !reasons.includes(details) && <Text importantForAccessibility="no" style={styles.body}
+          numberOfLines={largeText ? undefined : 1}>{details}</Text>}
       </View>;
     }}
   />;

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useArchiveConfirmation } from './ArchiveScreen';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ActionMenu, ActionSheet } from './ActionSheet';
 import { ImageViewer } from './ImageViewer';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
@@ -284,6 +284,7 @@ export function PhotoDetail({ item, close, changed, open }: {
       await native.decide(photo.id, decision, collection);
       setPhoto({ ...photo, decision, collection });
       setOrganizing(false);
+      if (decision === 'kept' && photo.decision !== 'kept') AccessibilityInfo.announceForAccessibility('Photo kept');
       changed();
       if (decision === 'dismissed') close();
     } catch {
@@ -347,8 +348,9 @@ export function PhotoDetail({ item, close, changed, open }: {
       summary="Eye analysis"
       footer={<View style={layout.footer}>
         <View style={styles.row}>
-          {kept ? <View accessible accessibilityLabel="Kept" style={layout.kept}>
-            <Icon name="check" size={18} tint={color.blue} /><Body>Kept</Body>
+          {kept ? <View accessible accessibilityLabel="Photo kept" style={layout.kept}>
+            <Icon name="check" size={18} tint={color.blue} />
+            <Text style={[styles.body, layout.keptLabel]}>Photo kept</Text>
           </View> : <Button label={photo.decision === 'dismissed' ? 'Undo dismissal' : 'Keep'} icon="bookmark"
             disabled={busy} style={layout.fill} run={() => void decide(photo.decision === 'new' ? 'kept' : 'new')} />}
           <ActionMenu title="Photo actions" label="More photo actions" overflow disabled={busy} options={[
@@ -456,6 +458,7 @@ const layout = StyleSheet.create({
   notes: { gap: 4, paddingBottom: 12 },
   footer: { gap: 8 },
   kept: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 48, gap: 8 },
+  keptLabel: { flexShrink: 1 },
   noteLabel: { color: color.muted, fontSize: 14 },
   details: { gap: 4, paddingTop: 8, borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
   scoreRow: { minHeight: 28, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', gap: 8 },

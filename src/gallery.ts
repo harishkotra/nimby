@@ -64,7 +64,7 @@ export type PersonalCandidate = {
   photo: Result; captured: number; place: string | null; lat: number | null; lon: number | null; related: string[];
   sceneRelated?: string[];
 };
-export type PersonalSection = 'connect' | 'patterns' | 'evolve';
+export type PersonalSection = 'connect' | 'patterns' | 'evolve' | 'onboarding';
 
 export type EyeStatus = {
   sdkVersion: string;

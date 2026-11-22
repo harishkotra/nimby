@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useDialog } from './Dialogs';
 import { ImageViewer } from './ImageViewer';
@@ -37,6 +37,8 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
   const [review, setReview] = useState<ArchivedPhoto[]>([]);
   const [preview, setPreview] = useState<ArchivedPhoto | null>(null);
   const [selecting, setSelecting] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState('');
+  const largeText = useWindowDimensions().fontScale >= 1.5;
   const reduced = useReducedMotion();
   const version = useRef(0);
   const inFlight = useRef(false);
@@ -69,6 +71,7 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
   }, [revision]);
 
   function toggle(item: ArchivedPhoto) {
+    setRestoreMessage('');
     setSelected((existing) => {
       const next = new Set(existing);
       if (next.has(item.id)) next.delete(item.id);
@@ -78,8 +81,18 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
   }
 
   async function restore(ids: string[]) {
+    if (!native || busy) return;
     setBusy(true);
-    try { await native?.restore(ids); changed(); }
+    setRestoreMessage('');
+    try {
+      const restored = await native.restore(ids);
+      if (restored > 0) {
+        const message = restored === 1 ? 'Photo restored' : `${restored.toLocaleString()} photos restored`;
+        setRestoreMessage(message);
+        AccessibilityInfo.announceForAccessibility(message);
+      }
+      changed();
+    }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not restore the selection.'); }
     finally { setBusy(false); }
   }
@@ -126,6 +139,7 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
         <View style={styles.between}>
           <Heading large>Archive</Heading>
           {!!items.length && <ActionLink label={selecting ? 'Done' : 'Select'} run={() => {
+            setRestoreMessage('');
             setSelecting(!selecting);
             setSelected(new Set());
           }} />}
@@ -149,18 +163,24 @@ export function ArchiveScreen({ revision, scanning, changed, openDuplicates }: {
       renderTile={(item) => {
         const days = daysLeft(item);
         const timing = days ? `${days} ${days === 1 ? 'day' : 'days'} until review` : 'Ready for review';
+        const archivedDate = new Date(item.archived).toLocaleDateString(undefined, { dateStyle: 'long' });
+        const label = [item.name || 'Photo', item.album, `Archived ${archivedDate}`, timing,
+          item.uri ? null : 'Original unavailable'].filter(Boolean).join(', ');
         return <View style={layout.album}>
-          <PhotoTile uri={item.uri} label={`${item.name}, ${timing}`} ratio={1.12}
+          <PhotoTile uri={item.uri} label={label} ratio={1.12}
             selected={selecting ? selected.has(item.id) : undefined}
             press={() => selecting ? toggle(item) : setPreview(item)}
             longPress={() => { setSelecting(true); toggle(item); }} />
-          <Text style={[layout.timing, !days && layout.ready]}>{timing}</Text>
-          <Text style={layout.caption} numberOfLines={1}>{item.album}</Text>
+          <Text importantForAccessibility="no" style={[layout.timing, !days && layout.ready]}>{timing}</Text>
+          <Text importantForAccessibility="no" style={layout.caption} numberOfLines={largeText ? undefined : 1}>{item.album}</Text>
         </View>;
       }} />
+    {!!restoreMessage && <View style={layout.restored}>
+      <Icon name="check" tint={color.blue} /><Text style={layout.restoredText}>{restoreMessage}</Text>
+    </View>}
     {!!selected.size && <View style={layout.bar}>
       <Text accessibilityLiveRegion="polite" style={layout.name}>{selected.size} selected</Text>
-      <View style={styles.row}>
+      <View style={largeText ? layout.stackedActions : styles.row}>
         <Button label="Restore selected" disabled={busy} run={() => void restore([...selected])} />
         <ActionLink label="Review for deletion" disabled={busy || selectedItems.some((item) => item.eligible > Date.now())}
           run={() => openReview(selectedItems)} />
@@ -213,4 +233,8 @@ const layout = StyleSheet.create({
   thumb: { height: 64, width: 64, borderRadius: 10 },
   name: { color: color.ink, fontWeight: '600', fontSize: 14 },
   bar: { paddingHorizontal: 20, paddingVertical: 8, backgroundColor: color.paper, gap: 8 },
+  restored: { flexDirection: 'row', alignItems: 'center', gap: 8, marginHorizontal: 20, marginBottom: 8,
+    padding: 12, borderRadius: 12, backgroundColor: color.tint },
+  restoredText: { flexShrink: 1, color: color.ink, fontSize: 14, fontWeight: '600' },
+  stackedActions: { gap: 4 },
 });

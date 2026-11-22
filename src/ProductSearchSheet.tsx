@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ActionSheet } from './ActionSheet';
+import { licenseDemo } from './demoConfig';
 import { native } from './gallery';
 import { ReadingStatus } from './ReadingStatus';
 import { googleShoppingUrl, productQuery, productQueryCandidates, visionProductQuery } from './nextStepFacts';
@@ -25,18 +26,19 @@ function retailerListings(value: unknown): Listing[] {
   });
 }
 
-export function ProductSearchSheet({ imageId, screenshotText, close }: {
-  imageId: string; screenshotText: string; close: () => void;
+export function ProductSearchSheet({ imageId, screenshotText, readWithQwen = false, close }: {
+  imageId: string; screenshotText: string; readWithQwen?: boolean; close: () => void;
 }) {
   const cachedTitle = useMemo(() => productQueryCandidates(screenshotText)[0], [screenshotText]);
   const [text, setText] = useState(cachedTitle ?? '');
   const [results, setResults] = useState<{ query: string; listings: Listing[] } | null>(null);
   const [loading, setLoading] = useState(false);
   const [readState, setReadState] = useState<ReadState>(
-    cachedTitle ? 'done' : native?.readShoppingText ? 'reading' : 'unavailable',
+    readWithQwen || cachedTitle ? 'done' : native?.readShoppingText ? 'reading' : 'unavailable',
   );
-  const [reader, setReader] = useState<Reader>('ocr');
-  const selectedReader = useRef<Reader>('ocr');
+  const [reader, setReader] = useState<Reader>(readWithQwen ? 'qwen' : 'ocr');
+  const selectedReader = useRef(reader);
+  const autoRead = useRef(readWithQwen);
   const [vision, setVision] = useState(() => native?.productVisionStatus?.());
   const [visionPending, setVisionPending] = useState(false);
   const [visionError, setVisionError] = useState('');
@@ -102,8 +104,8 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
     if (value === 'ocr') edited.current = false;
   }
 
-  async function runVision(operation: 'download' | 'remove' | 'read') {
-    if (!native || visionActive) return;
+  const runVision = useCallback(async (operation: 'download' | 'remove' | 'read') => {
+    if (!native || visionActive || (licenseDemo && operation !== 'read')) return;
     setVisionPending(true);
     setVisionError('');
     setReadState(operation === 'read' ? 'reading' : 'done');
@@ -132,7 +134,13 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
         setVisionPending(false);
       }
     }
-  }
+  }, [imageId, visionActive]);
+
+  useEffect(() => {
+    if (!autoRead.current) return;
+    autoRead.current = false;
+    void runVision('read');
+  }, [runVision]);
 
   const progress = vision ? Math.min(100, Math.floor(100 * vision.received / vision.total)) : 0;
 
@@ -193,9 +201,9 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
           <Body>Qwen analyzes the image on your phone. Check the suggested name and model number.</Body>
           <View style={layout.readerActions}>
             <ActionLink label="Read with Qwen" disabled={loading || visionActive} run={() => void runVision('read')} />
-            <ActionLink label="Remove download" disabled={visionActive} run={() => void runVision('remove')} />
+            {!licenseDemo && <ActionLink label="Remove download" disabled={visionActive} run={() => void runVision('remove')} />}
           </View>
-        </> : <>
+        </> : licenseDemo ? <Body>Qwen review requires an installed model. You can still use OCR.</Body> : <>
           <Body>Qwen3.5 0.8B reads the image on your phone after a one-time download.</Body>
           <ActionLink label="Download Qwen · 1.3 GB" disabled={visionActive} run={() => void runVision('download')} />
         </>}

@@ -36,7 +36,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
   const [selection, setSelection] = useState<string[] | null>(null);
   const [comparing, setComparing] = useState(false);
   const [reminder, setReminder] = useState<NextStepPhoto | null>(null);
-  const [searchProduct, setSearchProduct] = useState<NextStepPhoto | null>(null);
+  const [productReview, setProductReview] = useState<NextStepPhoto | null>(null);
   const [date, setDate] = useState('');
   const [time, setTime] = useState('09:00');
   const [model, setModel] = useState(() => native?.productVisionStatus?.());
@@ -87,6 +87,9 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
   const related = active?.kind === 'shopping' ? relatedShopping(active, items) : [];
   const selected = scoped.filter(({ photo }) => selection?.includes(photo.id));
   const scheduledDate = reminderDate(date, time);
+  const readProductWithQwen = licenseDemo && !scanning && model?.supported === true && model.installed &&
+    model.phase === 'idle' && !!native.identifyProductImage;
+  const productAction = licenseDemo ? readProductWithQwen ? 'Review with Qwen' : 'Review product' : 'Find buying links';
 
   function select(next: NextStepKind) {
     setKind(next);
@@ -213,7 +216,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
         if (comparing) return <View style={layout.compareTile}>
           <PhotoTile uri={item.photo.uri} label={`Open ${info.title}`} contain ratio={0.85} press={() => open(item.photo)} />
           <Heading>{info.title}</Heading>{!!info.caption && <Body>{info.caption}</Body>}
-          {!licenseDemo && <ActionLink label="Find buying links" run={() => setSearchProduct(item)} />}
+          <ActionLink label={productAction} run={() => setProductReview(item)} />
         </View>;
         return <View style={layout.panel}>
           <View style={layout.photoRow}>
@@ -230,7 +233,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
           {!selection && <ActionLink label={expanded ? 'Close follow-up' : 'Review next steps'}
             run={() => { setActiveId(expanded ? null : item.photo.id); setError(''); }} />}
           {expanded && <View style={styles.column}>
-            {item.kind === 'shopping' ? !licenseDemo && <Button label="Find buying links" icon="search" run={() => setSearchProduct(item)} /> :
+            {item.kind === 'shopping' ? <Button label={productAction} icon="search" run={() => setProductReview(item)} /> :
               <Button label={item.state ? 'Change reminder' :
               item.kind === 'receipt' && receiptFacts(item.text).returnBy ? 'Set return reminder' : 'Set reminder'} run={() => startReminder(item)} />}
             <View style={layout.followUpActions}>
@@ -279,8 +282,9 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
         {!!error && <ErrorText>{error}</ErrorText>}
       </View>
     </ActionSheet>}
-    {!licenseDemo && searchProduct && <ProductSearchSheet key={searchProduct.photo.id} imageId={searchProduct.photo.id}
-      screenshotText={searchProduct.text} close={() => { setSearchProduct(null); refreshModel(); }} />}
+    {productReview && <ProductSearchSheet key={productReview.photo.id} imageId={productReview.photo.id}
+      screenshotText={productReview.text} readWithQwen={readProductWithQwen}
+      close={() => { setProductReview(null); refreshModel(); }} />}
   </View>;
 }
 

@@ -6,18 +6,21 @@ import kotlin.coroutines.CoroutineContext
 
 internal class PersonalMemory(context: Context, private val memory: GalleryMemory) {
     private val preferences = context.getSharedPreferences("nimby-personal-memory", Context.MODE_PRIVATE)
+    private val appPreferences = context.getSharedPreferences("nimby-app", Context.MODE_PRIVATE)
 
     private val sections = setOf("connect", "patterns", "evolve")
 
-    fun read(section: String): String? {
-        require(section in sections)
-        return preferences.getString(section, null)
+    private fun storage(section: String) = when (section) {
+        "onboarding" -> appPreferences
+        in sections -> preferences
+        else -> throw IllegalArgumentException("Unknown local state section.")
     }
 
+    fun read(section: String): String? = storage(section).getString(section, null)
+
     fun save(section: String, data: String?) {
-        require(section in sections)
         require(data == null || data.length <= 750_000) { "This list is too large to save." }
-        check(preferences.edit().putString(section, data).commit()) { "Nimby could not save your changes." }
+        check(storage(section).edit().putString(section, data).commit()) { "Nimby could not save your changes." }
     }
 
     fun clear() {

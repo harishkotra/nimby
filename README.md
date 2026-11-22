@@ -2,108 +2,71 @@
 
 <img src="src/assets/mascot/06_discovering.png" alt="Nimby mascot looking curious" width="112" align="right">
 
-**Find the things you saved.** The receipt you need to file, the whiteboard from a meeting, or the photo from that trip in January. Nimby makes your Android gallery searchable on your phone and shows you why a photo matched.
+**Your phone. Your agent.**
 
-[Take a tour](#take-a-tour) · [Run on Android](#run-on-android) · [Architecture](#architecture) · [Privacy and archive](#privacy-and-archive)
+Your camera roll has become a junk drawer. The receipt you need, the product screenshot you saved, and the photos from your last trip are all in there somewhere.
 
-## Take a tour
+Nimby turns your Android gallery into searchable memory. Desert Ant Labs Eye understands what’s in a photo. Local OCR reads the words. Search brings back the original photo and shows why it matched. The analysis happens on your phone.
 
-Start with a folder of screenshots, a trip album, or a few photos from Android’s picker. Nimby analyzes the originals you can access and reuses its work on later scans. The results open as soon as the scan finishes.
+[Demo](#demo) · [Early signal](#early-signal) · [Architecture](#architecture) · [Run on Android](#run-on-android)
 
-```mermaid
-flowchart TD
-    Gallery["Gallery, album, or photo selection"] --> Scan["Scan on your phone"]
-    Scan --> Index[("Local photo index")]
-    Index --> Recall["Find a photo"]
-    Index --> Daily["See today's picks"]
-    Index --> Timeline["Explore moments"]
-    classDef accent fill:#c7e8d5,stroke:#3a6b52,color:#14251b
-    class Index accent
-```
+## Demo
 
-### Search with what you remember
+*About 45 seconds on scrcpy.* Open Home with around 40 photos already scanned, including a few receipts, product screenshots, and travel photos.
 
-| If you remember… | Try this in Search |
-| --- | --- |
-| A word or model number from a screenshot | Type it and look for the **Photo text** snippet. |
-| When and where you took the photo | Try `Singapore Jan` or combine a place and date in **Filters**. Add a year to narrow it down. |
-| What a scene looked like | Try `beach` or `brick wall`. Look for the matching Eye label or saved Qwen tag below the photo. |
-| Another photo that looks like it | Tap **Search by photo**. Eye compares scenes, layouts, and styles. |
+1. **Search** for a distinctive word you remember seeing in one image, such as a store name on a receipt.
+2. **Show the match.** The original photo comes back with evidence like **Photo text** or **Eye category** right below it.
+3. **Keep it.** Open the photo and tap **Keep**. Nimby remembers the decision on your phone.
 
-Saved place names are searchable as soon as you add them. Enable **Photo Map** locations to match supported city names against GPS and see your photos on the offline map.
+Use a word you’ve rehearsed on that phone. If there’s time, open a pick in **Daily discoveries** or jump to a geotagged trip on **Photo Map**.
 
-```mermaid
-flowchart TD
-    Query["A word, place, or date"] --> Scope["Apply date, place, category, and source filters"]
-    Scope --> Direct["Rank photo text, saved Qwen tags, Eye labels, and metadata"]
-    Direct --> Results["Show original photos and the reason each matched"]
-    Direct -->|When a scene search has few direct matches| Neighbors["Compare Eye embeddings with a strong scene match"]
-    Neighbors -->|Up to four visual matches below direct results| Results
-```
+## From gallery search to personal intelligence
 
-Exact photo text takes priority. Visual matches show the tag that led to the suggestion. You can also download an optional English voice pack from Search and speak a query offline. With Qwen installed, open **More photo actions → Search tags** to review and save extra tags for a photo.
+**Recall → Discover → Decide → Evolve**
 
-### See what’s worth revisiting today
+Search gets you back to the thing you saved. Daily discoveries bring useful older photos back into view. Timeline groups related shots and can pick highlights from a trip. In **Shopping & receipts**, optional on-device Qwen Vision helps identify products and suggest receipt follow-ups. Your decisions give future suggestions more context.
 
-**Home → Daily discoveries** brings back up to three photos or saved references. The set stays put for the day and favors photos from outside recent sets. Each pick has a short reason. Keep, dismiss, or archive from the photo viewer, or browse more by category when you’re done.
+Next, we’re hardening search on real galleries, moving web license unlocks toward production, and making daily discoveries worth coming back for.
+
+## Early signal
+
+A friends-and-family share brought **38 landing-page visits and 27 waitlist signups** (~71%). **21 of the signups said they’d pay.** Interest spanned limited free access, ₹149/month, and ₹2,500 lifetime.
+
+We’re exploring Free, Plus, and Lifetime. The preview has a sandbox web checkout and license-key flow. Privacy controls and Archive are available without a license. [Landing and checkout setup](landing/README.md)
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    Today["Today's picks"] --> Choice["Keep, dismiss, or archive"]
-    Choice --> Signals["Learn from your choices"]
-    Signals --> Tomorrow["Choose tomorrow's picks"]
+    Gallery["Android photos"] --> Scan["Scan with Eye and OCR"]
+    Scan --> Index[("Local SQLite index")]
+    Index --> Search["Find a photo with match evidence"]
+    Index --> Discover["Daily picks and Timeline"]
+    Search --> Keep["Keep"]
+    Keep --> Index
 ```
 
-### Put an outing back together
+Expo and React Native handle the UI. A Kotlin worker reads photos through Android’s media APIs, uses Eye SDK 4.3.0 for categories and visual similarity, and uses Tesseract for text. SQLite and FTS4 store the searchable results and user decisions so later scans can reuse previous work.
 
-Open **Explore → Timeline** to see suggested moments. Nimby combines when and where photos were taken with existing Eye scene embeddings. Confirm a moment, rename it, or split and merge suggestions to fit what you remember. **Pick highlights** chooses up to ten photos for that moment, skips screenshots and documents, and favors one frame from each detected burst.
-
-```mermaid
-flowchart LR
-    Time["Capture time"] --> Moment["Suggested moment"]
-    Place["Saved place or GPS"] --> Moment
-    Scene["Similar scenes"] --> Moment
-    Moment --> Decide["Confirm, rename, split, or merge"]
-    Moment --> Best["Pick up to ten highlights"]
-```
-
-### Get something done with a saved screenshot
-
-Under **Explore → Shopping & receipts**, compare up to four shopping screenshots, look up a product, file a receipt into **Reimbursements**, or set a reminder. **Review with Qwen** can suggest a receipt follow-up. You approve the action and choose the date. Shopping notifications are opt-in and arrive at most once a week.
-
-**Find buying links** prefills an editable query using local OCR or optional Qwen vision. When hosted search is enabled on the landing site, Nimby can show retailer candidates directly. Google Shopping is also available in the browser. The provider receives the text you submit. Your screenshot stays on your phone.
-
-| Also in Nimby | Where to look |
-| --- | --- |
-| Review exact copies and similar photos, choose a keeper, and archive the rest | **Home → Duplicates** |
-| See photos by place on a bundled OpenStreetMap basemap | **Explore → See where photos were taken** |
-| Review recurring themes, compare next steps, and record what worked | **Explore → More to explore** |
-| Check scan coverage, categories, and estimated storage savings | **Home → View gallery insights** |
-| Check photo permissions, Auto-scan, and the Eye self-test | **Settings** |
+**Qwen3.5 0.8B Vision** is an optional 1.3 GB model for image details, search tags, and follow-ups. The checkout demo uses an already installed copy. An optional Moonshine pack adds English voice search. Scanning and typed search work with the bundled models.
 
 ## Privacy and archive
 
-Open **Settings → Legal** to read Nimby’s Privacy Policy and Terms & Conditions offline. The contact email is `reach@getnimby.com` in Hyderabad, India. Set `EXPO_PUBLIC_NIMBY_SHOW_WEBSITE=1` when building to show the `getnimby.com` link once the site is live.
+Android controls which photos Nimby can read. Photo analysis, text recognition, and search run on the phone. Photo Map location access is opt-in. **Find buying links** sends the product text you approve to a retailer search provider.
 
-Nimby runs photo analysis, OCR, voice transcription, and retrieval on your phone. Android controls access to your full or selected library. You can also pick individual photos. GPS indexing is opt-in and **Clear photo locations** removes stored coordinates.
+Archive hides photos within Nimby and leaves the originals in your gallery. You can restore them at any time. After 30 days they become eligible for deletion review. On Android 11 and later, deleting an original requires separate in-app confirmation and Android authorization.
 
-Archiving hides a photo within Nimby and leaves the original in the gallery. Restore it whenever you like. After 30 days it becomes eligible for a separate deletion review. Deletion requires your in-app approval and Android authorization on Android 11 or later. Nimby records deleted file bytes only after it verifies the original is gone.
-
-```mermaid
-flowchart TD
-    Gallery["Photo in your gallery"] -->|Archive| Hidden["Hidden in Nimby"]
-    Hidden -->|Restore any time| Gallery
-    Hidden -->|After 30 days| Review["Eligible for deletion review"]
-    Review -->|You confirm in Nimby and Android| Delete["Verify original was deleted"]
-```
+Read the Privacy Policy and Terms & Conditions in **Settings → Legal**, or contact **reach@getnimby.com**.
 
 ## Run on Android
 
-Use **Node.js 22.18 or later**, **JDK 17**, Android Studio, and the Android SDK. Nimby runs on Android 7 or later on `arm64-v8a` or `x86_64`.
+Nimby’s sideload preview is **`v0.0.1`**. Use Android 7 or later on an `arm64-v8a` or `x86_64` device.
 
-1. Set `ANDROID_HOME` or put your SDK path in `android/local.properties`. Connect a device or start an emulator and check `adb devices`.
-2. Get `eye.tflite` and `eye_meta.json` from the Eye v1.0.0 release. Review the upstream terms and put both files in `modules/nimby-gallery/android/src/main/assets/eye/`. Gradle packages them with Nimby. [Eye model release](https://huggingface.co/desert-ant-labs/eye/tree/v1.0.0)
-3. If `android/app/debug.keystore` is missing, create a local signing key. Keep using the same key for future installs so Android can preserve your app data.
+To build from source, use Node.js 22.18+, JDK 17, and the Android SDK.
+
+1. Set `ANDROID_HOME` or add the SDK path to `android/local.properties`. Connect a device or emulator and check `adb devices`.
+2. Put `eye.tflite` and `eye_meta.json` in `modules/nimby-gallery/android/src/main/assets/eye/`. [Eye v1.0.0 weights and terms](https://huggingface.co/desert-ant-labs/eye/tree/v1.0.0)
+3. If `android/app/debug.keystore` is missing, create it with the command below. Reuse the same key for sideload updates.
 
 ```sh
 keytool -genkeypair -keystore android/app/debug.keystore -storepass android \
@@ -116,143 +79,17 @@ npm ci
 npm run android
 ```
 
-Open **Settings → On-device models → Run Self-Test** to check the bundled Eye runtime and see its inference time.
-
-### Take it for a demo without Metro
-
-Run `npm run android:demo` with your phone connected, then open Nimby from the Android launcher. This installs a local release with the JavaScript embedded and writes the APK to `android/app/build/outputs/apk/release/nimby-v0.0.1.apk`.
-
-Scan a small album with a few screenshots and dated photos. Search for a word you can see in a screenshot, point out the **Photo text** evidence, and tap **Keep**. Open **Daily discoveries** for a pick and **Timeline** for a suggested moment. To demo Qwen, download it ahead of time and check for **Ready** in Explore.
-
-### Auto-scan
-
-After your first scan, enable **Settings → Photo access → Auto-scan**. Choose daily or weekly and optionally restrict checks to charging. Android chooses when to run based on device conditions. Nimby checks up to 24 candidate photos per batch, skipping unchanged analyses, archived originals, and excluded albums. Settings shows the last check and its result. Clearing analysis turns Auto-scan off.
-
-## Architecture
-
-The React Native app calls a local Expo module in Kotlin. The scan worker analyzes resized images from Android’s media sources and saves reusable results to SQLite. The app uses that same index to search, recommend picks, build moments, and review duplicates.
-
-```mermaid
-flowchart TD
-    UI["React Native · Home, Search, Explore, Archive"] --> Bridge["NimbyGallery · Kotlin Expo module"]
-    Media["Android media · MediaStore and Photo Picker"] --> Worker["ScanWorker · cached batch analysis"]
-    Bridge --> Worker
-    Worker --> Eye["Eye SDK · labels, quality, embeddings"]
-    Worker --> OCR["Tesseract · screenshot and document text"]
-    Worker --> Local[("SQLite · photo index, FTS4, daily picks, archive")]
-    Bridge --> Local
-    Bridge --> Models["Optional Qwen vision and Moonshine voice"]
-    Bridge --> Jobs["WorkManager · Auto-scan and reminders"]
-    Jobs --> Worker
-    Bridge --> Memory[("PersonalMemory · event edits and outcomes")]
-```
-
-<details>
-<summary>Follow a scan through the worker</summary>
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant App as Nimby
-    participant Worker as ScanWorker
-    participant Android as Android media
-    participant DB as SQLite
-    participant Eye as On-device Eye
-
-    User->>App: Scan a gallery, album, or selection
-    App->>Worker: Start a bounded scan
-    Worker->>Android: Resolve permitted media and versions
-    loop For each eligible image
-        Worker->>DB: Check media and model versions
-        alt Current analysis exists
-            DB-->>Worker: Reuse the saved result
-        else New or modified image
-            Worker->>Android: Read and resize the image
-            Worker->>Eye: Analyze on device
-            Eye-->>Worker: Return labels, scores, and an embedding
-            Worker->>DB: Save the result
-        end
-    end
-    Worker->>DB: Update visual matches and scan history
-    Worker-->>App: Open the completed scan results
-```
-
-</details>
-
-| What runs locally | What it powers |
-| --- | --- |
-| **Desert Ant Labs Eye Android SDK `4.3.0`** with **v1.0.0 weights** | Classification, quality scores, visual similarity, and Timeline. Exact-copy detection uses file hashes. [Eye documentation](https://desertant.com/docs/eye/) · [Model notices](modules/nimby-gallery/android/src/main/assets/eye/THIRD_PARTY_NOTICES.md) |
-| **SQLite and FTS4** | Gallery metadata, OCR text, saved Qwen tags, search, archives, and stored daily picks. Schema v10 normalizes earlier embeddings and v11 adds daily picks and decision timestamps. |
-| **Tesseract4Android** with bundled English data | OCR for text search and the default product reader. [Tesseract4Android](https://github.com/adaptech-cz/Tesseract4Android) · [Tessdata](https://github.com/tesseract-ocr/tessdata_fast) |
-| **Qwen3.5 0.8B vision**, optional **1.3 GB** download | Product names, receipt follow-up suggestions, and reviewed search tags. LiteRT-LM 0.19.1 runs the model on CPU after verifying the download with SHA-256. [Model card](https://huggingface.co/litert-community/Qwen3.5-0.8B#vision-build-qwen35-08b-vl_int8litertlm) |
-| **Moonshine Tiny Streaming**, optional English voice pack | On-device transcription on Android 8 and later. [Moonshine models](https://github.com/moonshine-ai/moonshine/blob/main/docs/models/available-models.md) |
-| **MapLibre** and bundled map data | Offline Photo Map with OpenStreetMap attribution. [Map data notices](modules/nimby-gallery/android/src/main/assets/photo-map/NOTICE.md) |
-
-Core scans and typed search work before any optional download. Get Qwen from **Explore** or **Settings → On-device models**. Public model downloads require no Hugging Face token. The Android build pins Kotlin 2.4.20 for Expo and LiteRT-LM compatibility.
+For the standalone preview, run `npm run android:demo` to build and install **`android/app/build/outputs/apk/release/nimby-v0.0.1.apk`**. Open **Settings → On-device models → Eye → Run Self-Test** to check the bundled model.
 
 ### Find buying links
 
-Released builds read `product-search.json` from the production landing site to discover the hosted retailer endpoint. The website serves public configuration, and the AWS API handles the search and reads the Tavily key from Secrets Manager. When the endpoint is unavailable, users can still open Google Shopping.
+Released builds read `product-search.json` from the landing site to find the hosted endpoint. The Tavily key lives on the server. Google Shopping is available in the browser if the endpoint is unavailable. [Deployment and configuration](landing/README.md#deploy-with-retailer-search)
 
-With AWS CLI v2 and AWS SAM CLI installed, put `TAVILY_API_KEY` in the gitignored root `.env` and deploy the API and landing page together.
+For local development, set `TAVILY_API_KEY` and `EXPO_PUBLIC_PRODUCT_SEARCH_URL=http://127.0.0.1:8787/product-search` in the gitignored `.env`, run `npm run product-search`, and use `adb reverse tcp:8787 tcp:8787`.
 
-```sh
-AWS_PROFILE=nimby NIMBY_AMPLIFY_APP_ID=d3ulvfvvudr0cr NIMBY_DEPLOY_PRODUCT_SEARCH=1 ./landing/deploy-aws.sh
-```
-
-The command checks the API before publishing the landing configuration. API Gateway throttles requests, and DynamoDB enforces the shared daily search limit. Future landing deploys can reuse the same stack. Installed builds that support the landing configuration pick up endpoint changes the next time the search sheet opens. [API template](server/product-search.aws.yaml) · [Landing setup](landing/README.md)
-
-<details>
-<summary>Use a local proxy for development</summary>
-
-If you specifically want to test the loopback proxy, set these variables in the gitignored root `.env`.
-
-```dotenv
-TAVILY_API_KEY=your-tavily-key
-EXPO_PUBLIC_PRODUCT_SEARCH_URL=http://127.0.0.1:8787/product-search
-```
-
-Run `npm run product-search` in a second terminal and connect your Android target.
-
-```sh
-adb reverse tcp:8787 tcp:8787
-```
-
-Reload from Metro after changing the override. The proxy keeps the API key on the host. Release builds ignore loopback overrides and use the hosted configuration. An explicit HTTPS `EXPO_PUBLIC_PRODUCT_SEARCH_URL` can override discovery for a separate environment.
-
-</details>
-
-## Verification
+### Development checks
 
 ```sh
 npm run typecheck
 node --test tests/*.test.mjs
-python3 tests/storage_smoke.py
-python3 tests/memory_smoke.py
-python3 tests/next_step_storage_smoke.py
-python3 tests/photo_map_asset_smoke.py
 ```
-
-<details>
-<summary>Native scoring and on-device checks</summary>
-
-```sh
-kotlinc modules/nimby-gallery/android/src/main/java/dev/nimby/gallery/DuplicateGrouping.kt \
-  tests/DuplicateGroupingSmoke.kt -include-runtime -d /tmp/nimby-duplicates.jar
-java -jar /tmp/nimby-duplicates.jar
-
-kotlinc modules/nimby-gallery/android/src/main/java/dev/nimby/gallery/VisualEmbeddings.kt \
-  tests/VisualEmbeddingsSmoke.kt -include-runtime -d /tmp/nimby-visual-embeddings.jar
-java -jar /tmp/nimby-visual-embeddings.jar
-
-kotlinc modules/nimby-gallery/android/src/main/java/dev/nimby/gallery/{DailyDiscovery,TimelineScenes,VisualEmbeddings}.kt \
-  tests/PersonalDiscoverySmoke.kt -include-runtime -d /tmp/nimby-discovery.jar
-java -jar /tmp/nimby-discovery.jar
-```
-
-- Run the Eye self-test, then scan the same album twice to check that analysis is reused. Open the results from each run under **Settings → Library status → Scan history**. Older records gain per-photo results after a new scan.
-- Change photo access in Android and check that Nimby reflects it. Archive and restore a photo, then verify it remains in the system gallery. Use expendable files for deletion checks.
-- Force-stop Nimby, reopen it, and run **Find Similar** twice on the same photo. `adb logcat -s NimbySearch:D` shows cache hits and lookup time. The Float32 cache holds up to 4,096 vectors (8 MiB) or 1,024 on low-RAM devices (2 MiB). The timings exclude reference-image inference.
-- Check OCR and Qwen autofill on a screenshot with a known product name. Submit an edited query and verify that a local reminder opens the correct follow-up.
-
-</details>

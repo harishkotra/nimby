@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, BackHandler, Keyboard, Linking, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
+import { AccessibilityInfo, ActivityIndicator, AppState, BackHandler, Keyboard, Linking, Pressable, ScrollView, StatusBar, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { DialogProvider, useDialog } from './Dialogs';
 import { ActionSheet } from './ActionSheet';
@@ -9,6 +9,7 @@ import { ExploreScreen, HomeDashboard, InsightsScreen } from './Dashboard';
 import { DuplicatesScreen } from './DuplicatesScreen';
 import { GalleryScreen } from './GalleryScreen';
 import { LaunchSplash } from './LaunchSplash';
+import { Onboarding } from './Onboarding';
 import { ArchiveScreen } from './ArchiveScreen';
 import { SettingsScreen } from './SettingsScreen';
 import { LegalDocumentScreen } from './LegalDocumentScreen';
@@ -84,6 +85,9 @@ export default function App() {
 function Nimby() {
   const show = useDialog();
   const license = useLifetimeLicense();
+  const [onboarding, setOnboarding] = useState<'loading' | 'first' | 'replay' | 'done'>('loading');
+  const [introSaving, setIntroSaving] = useState(false);
+  const finishingIntro = useRef(false);
   const [screen, setScreen] = useState<Screen>('Home');
   const [searchVisited, setSearchVisited] = useState(false);
   const [access, setAccess] = useState<Access>(() => native!.access());
@@ -117,6 +121,17 @@ function Nimby() {
   const albumRequest = useRef(0);
   const navigation = useRef(screen);
   navigation.current = screen;
+
+  useEffect(() => {
+    let active = true;
+    void native!.readPersonal('onboarding').then((saved) => {
+      if (active) setOnboarding(saved === '1' ? 'done' : 'first');
+    }).catch(() => {
+      // Older native builds and unavailable storage can still open Home.
+      if (active) setOnboarding('done');
+    });
+    return () => { active = false; };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -203,12 +218,12 @@ function Nimby() {
 
   useEffect(() => {
     const back = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (screen === 'Home') return false;
+      if (onboarding !== 'done' || screen === 'Home') return false;
       goBack();
       return true;
     });
     return () => back.remove();
-  }, [screen, album, feedCategory, feed]);
+  }, [onboarding, screen, album, feedCategory, feed]);
 
   useEffect(() => {
     if (screen !== 'Home') return;
@@ -321,6 +336,21 @@ function Nimby() {
     }
   }
 
+  async function finishOnboarding(action: 'home' | 'scan') {
+    if (finishingIntro.current) return;
+    finishingIntro.current = true;
+    if (onboarding === 'first') {
+      setIntroSaving(true);
+      await native!.savePersonal('onboarding', '1').catch(() => {
+        // Saving the introduction should never block access to the gallery.
+      });
+      setIntroSaving(false);
+    }
+    setOnboarding('done');
+    finishingIntro.current = false;
+    if (action === 'scan') void pick();
+  }
+
   function navigate(requested: Screen) {
     const destination = (requested === 'Parallel' || requested === 'Evolve') && !license.premium ? 'Settings' : requested;
     if (destination === screen) return;
@@ -393,6 +423,10 @@ function Nimby() {
   const primary = tabs.some((tab) => tab.name === screen);
   const selectedTab = primary ? screen : backTo.current;
 
+  if (onboarding === 'loading') return <ActivityIndicator accessibilityLabel="Opening Nimby" color={color.blue} style={layout.main} />;
+  if (onboarding !== 'done') return <Onboarding saving={introSaving} replay={onboarding === 'replay'}
+    finish={(action) => void finishOnboarding(action)} />;
+
   return <>
     {(screen === 'Home' || !primary) && <View style={layout.top}>
       {screen === 'Home'
@@ -455,6 +489,7 @@ function Nimby() {
       {screen === 'Settings' && <SettingsScreen access={access} scan={scan} revision={revision} license={license}
         changed={changed} openPermissionSettings={showSettings} openArchive={() => navigate('Archive')}
         openScan={(id) => openReview('scan', null, id)}
+        openOnboarding={() => setOnboarding('replay')}
         openLegal={navigate}
         onResume={() => { setScan(native!.scanStatus()); navigate('Analysis'); }} />}
       {(screen === 'PrivacyPolicy' || screen === 'TermsAndConditions') && <LegalDocumentScreen key={screen} document={screen} />}
@@ -479,6 +514,21 @@ function AnalysisScreen({ scan, access, control, revision, open, changed, done }
     cancelled: 'Scan cancelled', blocked: 'Scan stopped',
   }[scan.phase];
   const progress = scan.total ? Math.min(100, Math.floor(scan.processed / scan.total * 100)) : 0;
+  const milestone = Math.min(75, Math.floor(progress / 25) * 25);
+  const lastSpoken = useRef({ runId: scan.runId, phase: scan.phase, milestone });
+  useEffect(() => {
+    const previous = lastSpoken.current;
+    const sameScan = previous.runId === scan.runId;
+    const previousMilestone = sameScan ? previous.milestone : 0;
+    lastSpoken.current = { runId: scan.runId, phase: scan.phase, milestone: Math.max(previousMilestone, milestone) };
+
+    if ((!sameScan || previous.phase !== scan.phase) &&
+      (scan.phase === 'paused' || scan.phase === 'complete' || scan.phase === 'cancelled' || scan.phase === 'blocked')) {
+      AccessibilityInfo.announceForAccessibility(title);
+    } else if (scan.phase === 'running' && milestone > previousMilestone) {
+      AccessibilityInfo.announceForAccessibility(`Scan ${milestone}% complete`);
+    }
+  }, [scan.runId, scan.phase, milestone, title]);
   const hasResults = scan.analyzed + scan.cached > 0;
   const active = scanActive(scan);
   const counts = `${scan.analyzed.toLocaleString()} newly analyzed · ${scan.cached.toLocaleString()} cached · ${scan.failed.toLocaleString()} failed`;
@@ -508,11 +558,11 @@ function AnalysisScreen({ scan, access, control, revision, open, changed, done }
     {scan.phase === 'complete' && !scan.total && <Body>{scan.automatic ? 'No new photos analyzed in this check.' : 'Choose another album, update photo access, or select photos manually.'}</Body>}
     {scan.phase === 'cancelled' && <Body>Photos Nimby already analyzed are saved.</Body>}
     <View style={layout.progressCard}>
-      <Text accessibilityLiveRegion="polite" style={layout.progressNumber}>
+      <Text style={layout.progressNumber}>
         {scan.processed.toLocaleString()} / {scan.total.toLocaleString()}
       </Text>
       <Body>Photos processed</Body>
-      <View accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: progress }}
+      <View accessibilityRole="progressbar" accessibilityLabel="Scan progress" accessibilityValue={{ min: 0, max: 100, now: progress }}
         style={layout.track}><View style={[layout.progress, { width: `${progress}%` }]} /></View>
       <Body>{counts}</Body>
     </View>

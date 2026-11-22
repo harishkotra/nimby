@@ -116,7 +116,9 @@ test('landing packages only the public retailer URL and the app accepts the host
     });
     const config = await readFile(join(output, 'product-search.json'), 'utf8');
     assert.deepEqual(JSON.parse(config), { version: 1, endpoint });
-    assert.match(await readFile(join(output, 'index.html'), 'utf8'), /Try test checkout/);
+    const html = await readFile(join(output, 'index.html'), 'utf8');
+    assert.match(html, /https:\/\/test\.checkout\.dodopayments\.com\/buy\//);
+    assert.doesNotMatch(html, /server-only-test-key/);
 
     const signal = new AbortController().signal;
     assert.equal(await fetchRetailerEndpoint(signal, async (url, options) => {

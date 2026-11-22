@@ -26,7 +26,7 @@ const pricing = `<section class="license-section" id="pricing" aria-labelledby="
         <div class="license-copy">
           <h2 id="pricing-title">Nimby Lifetime</h2>
           <p>Plan from saved photos with Parallel and revisit past choices with Evolve.</p>
-          <p>Redeem the key from your email in <strong>Settings → License</strong>.</p>
+          <p>On a license-enabled build, redeem the key from your email in <strong>Settings → License</strong>.</p>
         </div>
         <div class="license-purchase">
           <p class="license-price"><strong>$${priceUsd}</strong> USD</p>

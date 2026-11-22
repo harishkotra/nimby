@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import {
-  AccessibilityInfo, Image, Pressable, StyleSheet, Text, View,
+  AccessibilityInfo, Image, Pressable, StyleSheet, Text, useWindowDimensions, View,
   type ImageSourcePropType, type StyleProp, type ViewStyle,
 } from 'react-native';
 import { NimbyMascot, type MascotState } from './NimbyMascot';
@@ -64,9 +64,11 @@ export function ActionLink({ label, display, run, disabled, danger }: {
 export function Segments<T extends string>({ options, value, select }: {
   options: readonly { value: T; label: string }[]; value: T; select: (value: T) => void;
 }) {
-  return <View accessibilityRole="radiogroup" style={styles.segments}>{options.map((option) => <Pressable key={option.value} accessibilityRole="radio"
+  const stacked = useWindowDimensions().fontScale >= 1.5;
+  return <View accessibilityRole="radiogroup" style={[styles.segments, stacked && styles.stackedSegments]}>{options.map((option) => <Pressable key={option.value} accessibilityRole="radio"
     accessibilityState={{ checked: option.value === value }} onPress={() => { if (option.value !== value) select(option.value); }}
-    style={({ pressed }) => [styles.segment, option.value === value && styles.activeSegment, pressed && styles.faded]}>
+    style={({ pressed }) => [styles.segment, stacked && styles.stackedSegment,
+      option.value === value && styles.activeSegment, pressed && styles.faded]}>
     <Text style={[styles.segmentText, option.value === value && { color: color.ink }]}>{option.label}</Text>
   </Pressable>)}</View>;
 }
@@ -181,7 +183,9 @@ export const styles = StyleSheet.create({
   chip: { backgroundColor: color.white, borderRadius: 12, minHeight: 48, minWidth: 48, maxWidth: '100%',
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, paddingHorizontal: 16 },
   segments: { flexDirection: 'row', borderRadius: 12, padding: 3, gap: 3, backgroundColor: color.black },
+  stackedSegments: { flexDirection: 'column' },
   segment: { flex: 1, minHeight: 48, borderRadius: 9, justifyContent: 'center', alignItems: 'center', padding: 6 },
+  stackedSegment: { flex: 0, paddingVertical: 10 },
   activeSegment: { backgroundColor: color.tint },
   segmentText: { color: color.muted, fontWeight: '600', fontSize: 14, textAlign: 'center' },
   selected: { backgroundColor: color.blue },

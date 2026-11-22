@@ -7,10 +7,6 @@ plugins {
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
-tasks.matching { it.name == 'createBundleReleaseJsAndAssets' }.configureEach {
-    inputs.property('nimbyLicenseDemo', providers.environmentVariable('EXPO_PUBLIC_NIMBY_LICENSE_DEMO').orElse(''))
-}
-
 /**
  * This is the configuration block to customize your React Native Android app.
  * By default you don't need to apply any configuration, just uncomment the lines you need.

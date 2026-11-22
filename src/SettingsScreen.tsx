@@ -1,5 +1,6 @@
 import { useDialog } from './Dialogs';
 import { AutoScanSettings } from './AutoScanSettings';
+import { ModelHeader } from './ModelHeader';
 import { QwenModelControls } from './QwenModelControls';
 import { licenseDemo } from './demoConfig';
 import { LicenseSettings, type useLifetimeLicense } from './LicenseSettings';
@@ -7,7 +8,9 @@ import { legalDocuments, type LegalDocumentId } from './legalDocuments';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { native, scanActive, type Access, type Album, type EyeStatus, type Processing, type Scan, type ScanRecord } from './gallery';
-import { ActionLink, Body, Button, Chip, color, ErrorText, formatBytes, Heading, Icon, type IconName, styles } from './ui';
+import { ActionLink, Body, Button, Chip, color, ErrorText, formatBytes, Heading, Icon, type IconName, Segments, styles } from './ui';
+
+const modelTabs = [{ value: 'eye', label: 'Eye' }, { value: 'qwen', label: 'Qwen Vision' }] as const;
 
 export function scanLine(record: ScanRecord) {
   const date = new Date(record.started).toLocaleDateString();
@@ -46,11 +49,13 @@ function SettingsAction({ name, icon, run, disabled, danger, expanded }: {
   </Pressable>;
 }
 
-export function SettingsScreen({ access, scan, openPermissionSettings, revision, changed, openArchive, onResume, openScan, license, openLegal }: {
+export function SettingsScreen({ access, scan, openPermissionSettings, revision, changed, openArchive, onResume, openScan,
+  license, openLegal, openOnboarding }: {
   access: Access; scan: Scan; openPermissionSettings: () => void; revision: number; changed: () => void;
   openArchive: () => void; onResume: () => void; openScan: (id: string) => void;
   license: ReturnType<typeof useLifetimeLicense>;
   openLegal: (document: LegalDocumentId) => void;
+  openOnboarding: () => void;
 }) {
   const show = useDialog();
   const [status, setStatus] = useState<EyeStatus | null>(null);
@@ -60,7 +65,7 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
   const [processing, setProcessing] = useState<Processing | null>(null);
   const [albums, setAlbums] = useState<Album[] | null>(null);
   const [privacyBusy, setPrivacyBusy] = useState(false);
-  const [modelDetails, setModelDetails] = useState(false);
+  const [modelTab, setModelTab] = useState<'eye' | 'qwen'>('eye');
   const [historyOpen, setHistoryOpen] = useState(false);
   const scanning = scanActive(scan);
   const scanLabel = { preparing: 'Preparing', running: 'Analyzing photos', paused: 'Paused', matching: 'Checking duplicates',
@@ -185,12 +190,13 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
       </View>}
     </SettingsCard>
     <SettingsCard title="On-device models" subtitle="Photo analysis runs on this phone" icon="scan">
-      <View style={layout.model}>
-        <View style={layout.modelHeader}>
-          <Heading>Desert Ant Eye</Heading>
-          <Text style={layout.detailLabel}>{!status ? 'Checking…' : status.packagedBytes ? 'Bundled' : status.filesReady ? 'Prepared' : 'Files unavailable'}</Text>
-        </View>
-        <Body>Recognizes photo categories and finds similar images.</Body>
+      <Segments options={modelTabs} value={modelTab} select={setModelTab} />
+      <View style={[layout.model, modelTab !== 'eye' && layout.hidden]}>
+        <ModelHeader title="Desert Ant Labs Eye"
+          help="Eye comes with Nimby and analyzes your gallery on this phone. Its photo categories make browsing easier, and its visual matches and quality scores help you review similar shots.">
+          <Text style={layout.detailLabel}>{statusError ? 'Status unavailable' : !status ? 'Checking…' :
+            status.packagedBytes ? 'Bundled' : status.filesReady ? 'Prepared' : 'Files unavailable'}</Text>
+        </ModelHeader>
         {eyeRuntime && <Body>Runtime · {eyeRuntime}</Body>}
         <View style={styles.row}>
           {checking ? <ActivityIndicator color={color.blue} /> : <View style={[layout.dot,
@@ -205,13 +211,7 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
         {scanning && <Body>Finish or cancel the current scan to run the check.</Body>}
         <ActionLink label={checking ? 'Checking Eye…' : 'Run Self-Test'} disabled={checking || scanning || !eyeFiles || statusError}
           run={() => void runCheck()} />
-      </View>
-      <View style={layout.divider} />
-      <QwenModelControls scanning={scanning} />
-      {status && <>
-        <View style={layout.divider} />
-        <SettingsAction name="Model details" icon="info" expanded={modelDetails} run={() => setModelDetails(!modelDetails)} />
-        {modelDetails && <>
+        {status && <>
           <View style={layout.details}>
             <Detail label="Eye SDK" value={status.sdkVersion} />
             <Detail label="Model version" value={status.modelVersion ?? 'Available after inference'} />
@@ -222,7 +222,10 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
           </View>
           <Body>Nimby loads Eye during scans and tests it with a bundled image.</Body>
         </>}
-      </>}
+      </View>
+      <View style={modelTab !== 'qwen' && layout.hidden}>
+        <QwenModelControls scanning={scanning} />
+      </View>
     </SettingsCard>
     <SettingsCard title="Your data" subtitle="Review the archive and manage albums" icon="archive">
       <SettingsAction name="Review archived media" icon="archive" run={openArchive} />
@@ -239,7 +242,8 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
         </View>
       </>}
     </SettingsCard>
-    <SettingsCard title="Legal" subtitle="How Nimby handles data and the terms for using it" icon="info">
+    <SettingsCard title="About Nimby" subtitle="Product guide, privacy, and terms" icon="info">
+      <SettingsAction name="Replay introduction" icon="image" run={openOnboarding} />
       <SettingsAction name={legalDocuments.PrivacyPolicy.title} icon="info" run={() => openLegal('PrivacyPolicy')} />
       <SettingsAction name={legalDocuments.TermsAndConditions.title} icon="info" run={() => openLegal('TermsAndConditions')} />
     </SettingsCard>
@@ -256,10 +260,9 @@ const layout = StyleSheet.create({
   panel: { backgroundColor: color.white, borderRadius: 16, padding: 16, gap: 12 },
   cardHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   cardIcon: { width: 40, height: 40, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: color.tint },
-  model: { gap: 4 },
-  modelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', columnGap: 12, rowGap: 4 },
+  model: { gap: 8 },
+  hidden: { display: 'none' },
   modelText: { flex: 1, gap: 2 },
-  divider: { height: StyleSheet.hairlineWidth, backgroundColor: color.rule },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: color.muted },
   successDot: { backgroundColor: color.blue },
   errorDot: { backgroundColor: color.danger },

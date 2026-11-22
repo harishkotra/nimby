@@ -8,6 +8,8 @@ The beta signup should require an **Email address** for beta invites. Use **Requ
 
 The published Tally URL is configured in [waitlist.js](dist/waitlist.js). The page loads Tally’s standard embed.
 
+The beta section links to the [v0.0.1 Android preview](https://github.com/harishkotra/nimby/releases/tag/v0.0.1). The APK was built with license redemption disabled. Use a release built with the license flag for the checkout handoff.
+
 ## Deploy to AWS
 
 Install AWS CLI v2 and sign in with a named profile in the account that should host the site. For IAM Identity Center, use `aws configure sso --profile nimby`. If you already have access keys, use `aws configure --profile nimby`. The deploy script uses the AWS CLI credential chain.
@@ -46,12 +48,12 @@ For a local pricing preview, generate a new output directory and open its `index
 node landing/build-demo.mjs /tmp/nimby-lifetime-site
 ```
 
-Build and install the sandbox license variant on a connected Android device.
+Build and install Nimby on a connected Android device. License redemption is enabled in the app and uses Dodo Test Mode.
 
 ```sh
-EXPO_PUBLIC_NIMBY_LICENSE_DEMO=1 npm run android:demo
+npm run android:demo
 ```
 
 Redeem the emailed key in **Settings → License**. The key unlocks **Plan from saved photos** and **Review past choices** in Explore. Release the device before reinstalling or switching phones. If the old installation is unavailable or an activation request lost its response, verify the purchase in Dodo Test Mode, locate the key’s active instance, and reset it through Dodo before retrying. The offline window lasts up to seven days after a successful check.
 
-Use a sideloaded build for this sandbox showcase. The normal build stays available without the demo flag.
+Use a sideloaded build for this sandbox showcase.
