@@ -21,17 +21,17 @@ if (html.split(marker).length !== 2) throw new Error('Expected exactly one demo 
 const checkout = new URL('/buy/' + productId, 'https://test.checkout.dodopayments.com');
 checkout.searchParams.set('quantity', '1');
 
-const pricing = `<section class="privacy" id="pricing" aria-labelledby="pricing-title">
-      <div class="wrap privacy-inner demo-plan">
-        <div>
+const pricing = `<section class="license-section" id="pricing" aria-labelledby="pricing-title">
+      <div class="wrap license-card">
+        <div class="license-copy">
           <h2 id="pricing-title">Nimby Lifetime</h2>
-          <p>$${priceUsd} USD once <span aria-hidden="true">·</span> one active device</p>
+          <p>Plan from saved photos with Parallel and revisit past choices with Evolve.</p>
+          <p>Redeem the key from your email in <strong>Settings → License</strong>.</p>
         </div>
-        <div>
-          <p>Plan from saved photos with Parallel and remember what worked with Evolve.</p>
-          <p>After checkout, look for your license key in your email. In the Nimby demo app, open Settings → License to redeem it.</p>
-          <a class="button" href="${checkout.href}">Try test checkout</a>
-          <p class="demo-note">No real payment.</p>
+        <div class="license-purchase">
+          <p class="license-price"><strong>$${priceUsd}</strong> USD</p>
+          <p class="license-terms">One-time purchase · One active device</p>
+          <a class="button" href="${checkout.href}">Get a License</a>
         </div>
       </div>
     </section>`;

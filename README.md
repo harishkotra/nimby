@@ -83,6 +83,8 @@ Under **Explore → Shopping & receipts**, compare up to four shopping screensho
 
 ## Privacy and archive
 
+Open **Settings → Legal** to read Nimby’s Privacy Policy and Terms & Conditions offline. The contact email is `reach@getnimby.com` in Hyderabad, India. Set `EXPO_PUBLIC_NIMBY_SHOW_WEBSITE=1` when building to show the `getnimby.com` link once the site is live.
+
 Nimby runs photo analysis, OCR, voice transcription, and retrieval on your phone. Android controls access to your full or selected library. You can also pick individual photos. GPS indexing is opt-in and **Clear photo locations** removes stored coordinates.
 
 Archiving hides a photo within Nimby and leaves the original in the gallery. Restore it whenever you like. After 30 days it becomes eligible for a separate deletion review. Deletion requires your in-app approval and Android authorization on Android 11 or later. Nimby records deleted file bytes only after it verifies the original is gone.
@@ -118,7 +120,7 @@ Open **Settings → On-device models → Run Self-Test** to check the bundled Ey
 
 ### Take it for a demo without Metro
 
-Run `npm run android:demo` with your phone connected, then open Nimby from the Android launcher. This installs a local release with the JavaScript embedded.
+Run `npm run android:demo` with your phone connected, then open Nimby from the Android launcher. This installs a local release with the JavaScript embedded and writes the APK to `android/app/build/outputs/apk/release/nimby-v0.0.1.apk`.
 
 Scan a small album with a few screenshots and dated photos. Search for a word you can see in a screenshot, point out the **Photo text** evidence, and tap **Keep**. Open **Daily discoveries** for a pick and **Timeline** for a suggested moment. To demo Qwen, download it ahead of time and check for **Ready** in Explore.
 

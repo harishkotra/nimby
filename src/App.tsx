@@ -11,6 +11,8 @@ import { GalleryScreen } from './GalleryScreen';
 import { LaunchSplash } from './LaunchSplash';
 import { ArchiveScreen } from './ArchiveScreen';
 import { SettingsScreen } from './SettingsScreen';
+import { LegalDocumentScreen } from './LegalDocumentScreen';
+import type { LegalDocumentId } from './legalDocuments';
 import { useLifetimeLicense } from './LicenseSettings';
 import { RecallScreen } from './RecallScreen';
 import { PhotoMapScreen } from './PhotoMapScreen';
@@ -29,7 +31,7 @@ import { NimbyMascot, mascotForScan } from './NimbyMascot';
 import { ActionLink, Body, Button, color, ErrorText, Heading, Icon, IconButton, type IconName, styles } from './ui';
 
 type Screen = 'Home' | 'Revisit' | 'Gallery' | 'Discover' | 'Analysis' | 'Settings' | 'Archive' | 'Explore' | 'Insights' | 'Duplicates'
-  | 'Recall' | 'PhotoMap' | 'Connect' | 'Patterns' | 'Parallel' | 'Evolve' | 'NextSteps';
+  | 'Recall' | 'PhotoMap' | 'Connect' | 'Patterns' | 'Parallel' | 'Evolve' | 'NextSteps' | LegalDocumentId;
 const tabs = [
   { name: 'Home', icon: 'home', label: 'Home' }, { name: 'Recall', icon: 'search', label: 'Search' },
   { name: 'Explore', icon: 'map', label: 'Explore' },
@@ -341,6 +343,8 @@ function Nimby() {
       else navigate(reviewBack.current);
     } else if (screen === 'Analysis') {
       navigate(analysisBack.current);
+    } else if (screen === 'PrivacyPolicy' || screen === 'TermsAndConditions') {
+      navigate('Settings');
     } else if (screen === 'Settings' || screen === 'Duplicates' || screen === 'Recall' || screen === 'PhotoMap'
       || screen === 'Connect' || screen === 'Patterns' || screen === 'Parallel' || screen === 'Evolve' || screen === 'NextSteps'
       || screen === 'Insights') {
@@ -451,7 +455,9 @@ function Nimby() {
       {screen === 'Settings' && <SettingsScreen access={access} scan={scan} revision={revision} license={license}
         changed={changed} openPermissionSettings={showSettings} openArchive={() => navigate('Archive')}
         openScan={(id) => openReview('scan', null, id)}
+        openLegal={navigate}
         onResume={() => { setScan(native!.scanStatus()); navigate('Analysis'); }} />}
+      {(screen === 'PrivacyPolicy' || screen === 'TermsAndConditions') && <LegalDocumentScreen key={screen} document={screen} />}
       {screen === 'Archive' && <ArchiveScreen revision={revision} scanning={scanActive(scan)}
         changed={() => setRevision((value) => value + 1)} openDuplicates={() => navigate('Duplicates')} />}
     </View>

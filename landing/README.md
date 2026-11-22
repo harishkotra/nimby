@@ -2,14 +2,9 @@
 
 Open [the landing page](dist/index.html) in a browser. The site is static and lives entirely in `landing/`. It uses sample photo content and the app’s original mascot and icons.
 
-## Tally waitlist
+## Tally beta signup
 
-The published form should ask for:
-
-- **Email address** (required). Use it to contact people about Nimby’s launch.
-- **Would you consider paying for Nimby?** (optional). Offer “Yes,” “Maybe, depending on the price,” and “No.”
-
-Set the button label to **Join the waitlist** and use a confirmation such as “You’re on the list. We’ll email you about early access to Nimby.”
+The beta signup should require an **Email address** for beta invites. Use **Request beta access** for the button and “Thanks for signing up. We’ll email you when beta invites open.” for the confirmation.
 
 The published Tally URL is configured in [waitlist.js](dist/waitlist.js). The page loads Tally’s standard embed.
 
@@ -23,7 +18,7 @@ Run this command from the project root.
 AWS_PROFILE=nimby NIMBY_AMPLIFY_APP_ID=d3ulvfvvudr0cr ./landing/deploy-aws.sh
 ```
 
-The command updates [the existing production page](https://production.d3ulvfvvudr0cr.amplifyapp.com/) with the Lifetime pricing card and the Tally waitlist. The checkout is labeled as a test and uses Dodo’s sandbox. The script uses the configured AWS region and defaults to `us-east-1`. It prints the HTTPS URL after verifying the published HTML.
+The command updates [the existing production page](https://production.d3ulvfvvudr0cr.amplifyapp.com/) with the Lifetime pricing card and the Tally beta signup section. The configured checkout uses Dodo’s test environment. The script uses the configured AWS region and defaults to `us-east-1`. It prints the HTTPS URL after verifying the published HTML.
 
 ### Deploy with retailer search
 

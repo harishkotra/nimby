@@ -1,6 +1,9 @@
-apply plugin: "com.android.application"
-apply plugin: "org.jetbrains.kotlin.android"
-apply plugin: "com.facebook.react"
+plugins {
+    id 'com.android.application'
+    // Match the AGP version supplied by the React Native Gradle plugin.
+    id 'com.android.built-in-kotlin' version '9.2.1'
+    id 'com.facebook.react'
+}
 
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
@@ -131,6 +134,16 @@ android {
     androidResources {
         noCompress += ['pmtiles']
         ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:!CVS:!thumbs.db:!picasa.ini:!*~'
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType('release')) { variant ->
+        variant.outputs.each { output ->
+            if (output.filters.isEmpty()) {
+                output.outputFileName.set('nimby-v0.0.1.apk')
+            }
+        }
     }
 }
 

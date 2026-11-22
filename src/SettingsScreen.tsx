@@ -3,6 +3,7 @@ import { AutoScanSettings } from './AutoScanSettings';
 import { QwenModelControls } from './QwenModelControls';
 import { licenseDemo } from './demoConfig';
 import { LicenseSettings, type useLifetimeLicense } from './LicenseSettings';
+import { legalDocuments, type LegalDocumentId } from './legalDocuments';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { native, scanActive, type Access, type Album, type EyeStatus, type Processing, type Scan, type ScanRecord } from './gallery';
@@ -45,10 +46,11 @@ function SettingsAction({ name, icon, run, disabled, danger, expanded }: {
   </Pressable>;
 }
 
-export function SettingsScreen({ access, scan, openPermissionSettings, revision, changed, openArchive, onResume, openScan, license }: {
+export function SettingsScreen({ access, scan, openPermissionSettings, revision, changed, openArchive, onResume, openScan, license, openLegal }: {
   access: Access; scan: Scan; openPermissionSettings: () => void; revision: number; changed: () => void;
   openArchive: () => void; onResume: () => void; openScan: (id: string) => void;
   license: ReturnType<typeof useLifetimeLicense>;
+  openLegal: (document: LegalDocumentId) => void;
 }) {
   const show = useDialog();
   const [status, setStatus] = useState<EyeStatus | null>(null);
@@ -236,6 +238,10 @@ export function SettingsScreen({ access, scan, openPermissionSettings, revision,
             })}
         </View>
       </>}
+    </SettingsCard>
+    <SettingsCard title="Legal" subtitle="How Nimby handles data and the terms for using it" icon="info">
+      <SettingsAction name={legalDocuments.PrivacyPolicy.title} icon="info" run={() => openLegal('PrivacyPolicy')} />
+      <SettingsAction name={legalDocuments.TermsAndConditions.title} icon="info" run={() => openLegal('TermsAndConditions')} />
     </SettingsCard>
     <SettingsCard title="Danger zone" subtitle="Remove Nimby’s analysis and keep your original photos" icon="info">
       <SettingsAction name="Clear AI analysis cache" icon="layers" danger disabled={scanning || checking || privacyBusy} run={() => confirmClear(false)} />
