@@ -215,7 +215,7 @@ export function ConnectScreen({
     showsVerticalScrollIndicator={false}
     ListHeaderComponent={<View style={layout.header}>
       <Heading large>Timeline</Heading>
-      <Body>Moments from photos taken around the same time or place.</Body>
+      <Body>Suggested moments based on when and where you took photos and how the scenes look.</Body>
       {merging ? <View style={layout.band}>
         <Body>Choose a moment to merge with “{merging.title}”.</Body>
         <View style={styles.row}>

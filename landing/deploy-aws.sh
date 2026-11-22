@@ -12,21 +12,64 @@ landing_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 region="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region || true)}}"
 region="${region:-us-east-1}"
 app_name=nimby-landing
-branch=production
+branch="${NIMBY_AMPLIFY_BRANCH:-production}"
 app_id="${NIMBY_AMPLIFY_APP_ID:-}"
+stage=PRODUCTION
 
 aws_cli() {
   aws --region "$region" --no-cli-pager "$@"
 }
 
-aws_cli sts get-caller-identity >/dev/null
-
 work_dir=$(mktemp -d)
 trap 'rm -rf -- "$work_dir"' EXIT
 archive="$work_dir/nimby-landing.zip"
+site_dir="$work_dir/site"
+case "$branch" in
+  production) ;;
+  demo)
+    stage=DEVELOPMENT
+    app_id="${app_id:-d3ulvfvvudr0cr}"
+    ;;
+  *) printf 'Set NIMBY_AMPLIFY_BRANCH to production or demo.\n' >&2; exit 1 ;;
+esac
+aws_cli sts get-caller-identity >/dev/null
+
+search_stack="${NIMBY_PRODUCT_SEARCH_STACK:-nimby-product-search}"
+search_url="${NIMBY_HOSTED_PRODUCT_SEARCH_URL:-}"
+if [[ "${NIMBY_DEPLOY_PRODUCT_SEARCH:-0}" == 1 ]]; then
+  search_url=$(AWS_REGION="$region" bash "$landing_dir/../server/deploy-product-search.sh")
+  if [[ -z "$search_url" || "$search_url" == None ]]; then
+    printf 'Retailer search stack did not return a ProductSearchUrl.\n' >&2
+    exit 1
+  fi
+elif [[ -z "$search_url" ]]; then
+  stack_error="$work_dir/search-stack-error"
+  if ! search_url=$(aws_cli cloudformation describe-stacks --stack-name "$search_stack" \
+    --query 'Stacks[0].Outputs[?OutputKey==`ProductSearchUrl`].OutputValue | [0]' --output text 2>"$stack_error"); then
+    if [[ $(<"$stack_error") != *ValidationError*'does not exist'* ]]; then
+      cat "$stack_error" >&2
+      exit 1
+    fi
+    search_url=''
+  fi
+  [[ "$search_url" != None ]] || search_url=''
+fi
+
+NIMBY_HOSTED_PRODUCT_SEARCH_URL="$search_url" node "$landing_dir/build-demo.mjs" "$site_dir"
+if [[ -n "$search_url" ]]; then
+  response="$work_dir/search-probe.json"
+  code=$(curl -q --silent --show-error --max-time 20 --header 'Content-Type: application/json' \
+    --data '{}' --output "$response" --write-out '%{http_code}' "$search_url")
+  if [[ "$code" != 400 ]] || ! node -e 'const body = JSON.parse(require("node:fs").readFileSync(process.argv[1])); process.exitCode = body.error === "Enter a product name or model." ? 0 : 1' "$response"; then
+    printf 'Retailer search endpoint did not recognize a Nimby JSON request.\n' >&2
+    exit 1
+  fi
+else
+  printf 'No retailer search stack found. This build will use Google Shopping.\n' >&2
+fi
 (
-  cd "$landing_dir/dist"
-  zip -qr "$archive" index.html style.css main.js waitlist.js assets -x '*/.*'
+  cd "$site_dir"
+  zip -qr "$archive" index.html style.css main.js waitlist.js product-search.json assets -x '*/.*'
 )
 
 if [[ -z "$app_id" ]]; then
@@ -54,7 +97,7 @@ fi
 
 existing_branch=$(aws_cli amplify list-branches --app-id "$app_id" --query "branches[?branchName=='$branch'].branchName" --output text)
 if [[ "$existing_branch" != "$branch" ]]; then
-  aws_cli amplify create-branch --app-id "$app_id" --branch-name "$branch" --stage PRODUCTION --no-enable-auto-build >/dev/null
+  aws_cli amplify create-branch --app-id "$app_id" --branch-name "$branch" --stage "$stage" --no-enable-auto-build >/dev/null
 fi
 
 deployment=$(aws_cli amplify create-deployment --app-id "$app_id" --branch-name "$branch" --query '[jobId,zipUploadUrl]' --output text)
@@ -75,8 +118,14 @@ for ((attempt = 0; attempt < 72; attempt++)); do
   case "$status" in
     SUCCEED)
       curl --fail --silent --show-error --retry 4 --retry-all-errors --max-time 20 "$site_url/" --output "$work_dir/published.html"
-      if ! cmp -s "$landing_dir/dist/index.html" "$work_dir/published.html"; then
+      if ! cmp -s "$site_dir/index.html" "$work_dir/published.html"; then
         printf 'Deploy succeeded, but %s has not returned this build yet.\n' "$site_url" >&2
+        exit 1
+      fi
+      curl --fail --silent --show-error --retry 4 --retry-all-errors --max-time 20 \
+        "$site_url/product-search.json" --output "$work_dir/published-search.json"
+      if ! cmp -s "$site_dir/product-search.json" "$work_dir/published-search.json"; then
+        printf 'Deploy succeeded, but %s has not returned the new retailer configuration yet.\n' "$site_url" >&2
         exit 1
       fi
       printf 'Published and verified %s\n' "$site_url"

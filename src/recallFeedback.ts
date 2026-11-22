@@ -3,9 +3,10 @@ import type { RecallPage } from './recallQuery';
 type Hit = RecallPage['items'][number];
 
 function tier(hit: Hit, query: string): number {
+  if (hit.matchKind === 'visual') return 3;
   const text = hit.evidence.find((item) => item.startsWith('Photo text: '));
   if (text?.toLocaleLowerCase().includes(query)) return 0;
-  if (hit.evidence.some((item) => item.startsWith('Eye tag: ') && item.toLocaleLowerCase().includes(query))) return 1;
+  if (hit.evidence.some((item) => (item.startsWith('Eye tag: ') || item.startsWith('Qwen tag: ')) && item.toLocaleLowerCase().includes(query))) return 1;
   return 2;
 }
 

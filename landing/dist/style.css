@@ -439,3 +439,9 @@ h3 { font-size: clamp(33px, 4.2vw, 59px); line-height: 1.02; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.demo-plan { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); }
+.demo-plan p:first-child { margin-top: 0; }
+.demo-plan .button { margin-top: 22px; background: var(--light-ink); color: var(--light); }
+.demo-plan .button:hover { background: #244533; }
+.demo-plan .demo-note { margin-top: 8px; font-size: .875rem; }

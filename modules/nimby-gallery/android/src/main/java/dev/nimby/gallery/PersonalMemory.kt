@@ -1,6 +1,8 @@
 package dev.nimby.gallery
 
 import android.content.Context
+import kotlinx.coroutines.ensureActive
+import kotlin.coroutines.CoroutineContext
 
 internal class PersonalMemory(context: Context, private val memory: GalleryMemory) {
     private val preferences = context.getSharedPreferences("nimby-personal-memory", Context.MODE_PRIVATE)
@@ -22,7 +24,7 @@ internal class PersonalMemory(context: Context, private val memory: GalleryMemor
         check(preferences.edit().clear().commit()) { "Nimby could not clear the saved feedback." }
     }
 
-    fun candidates(start: Long, end: Long, includeLocations: Boolean): Map<String, Any?> {
+    fun candidates(start: Long, end: Long, includeLocations: Boolean, sceneContext: CoroutineContext? = null): Map<String, Any?> {
         require(start < end)
         val hits = mutableListOf<Map<*, *>>()
         var offset = 0
@@ -41,6 +43,7 @@ internal class PersonalMemory(context: Context, private val memory: GalleryMemor
         val sources = hits.mapNotNull { (it["photo"] as? Map<*, *>)?.get("sourceKey") as? String }.distinct()
         val links = if (ids.isEmpty()) emptyMap() else links(ids)
         val locations = if (!includeLocations || sources.isEmpty()) emptyMap() else locations(sources)
+        val scenes = if (sceneContext == null) emptyMap() else sceneLinks(hits, sceneContext)
         val items = hits.mapNotNull { item ->
             val photo = item["photo"] as? Map<*, *> ?: return@mapNotNull null
             val id = photo["id"] as? String ?: return@mapNotNull null
@@ -48,9 +51,35 @@ internal class PersonalMemory(context: Context, private val memory: GalleryMemor
             val gps = locations[photo["sourceKey"]]
             mapOf("photo" to photo, "captured" to date, "place" to item["place"],
                 "lat" to gps?.first, "lon" to gps?.second, "related" to links[id].orEmpty(),
-                "aesthetic" to item["aesthetic"], "keeper" to item["keeper"])
+                "aesthetic" to item["aesthetic"], "keeper" to item["keeper"]) +
+                (scenes[id]?.let { mapOf("sceneRelated" to it) } ?: emptyMap())
         }
         return mapOf("items" to items, "truncated" to more)
+    }
+
+    private fun sceneLinks(hits: List<Map<*, *>>, cancellation: CoroutineContext): Map<String, List<String>> {
+        val stamps = hits.mapNotNull { item ->
+            val photo = item["photo"] as? Map<*, *> ?: return@mapNotNull null
+            if (photo["category"] != "Photos" && photo["category"] != "Selfies") return@mapNotNull null
+            val id = (photo["id"] as? String)?.toLongOrNull() ?: return@mapNotNull null
+            val captured = (item["captured"] as? Number)?.toLong()?.takeIf { it > 0 } ?: return@mapNotNull null
+            TimelinePhotoStamp(id, captured)
+        }.distinctBy { it.id }.sortedWith(compareBy<TimelinePhotoStamp> { it.captured }.thenBy { it.id })
+        if (stamps.size < 2) return emptyMap()
+        val offsets = stamps.mapIndexed { index, stamp -> stamp.id to index }.toMap()
+        val vectors = FloatArray(stamps.size * EYE_EMBEDDING_DIMENSIONS)
+        val loaded = BooleanArray(stamps.size)
+        val slots = stamps.joinToString(",") { "?" }
+        memory.readableDatabase.rawQuery("""SELECT id, embedding FROM images WHERE id IN ($slots)
+            AND engine = ? AND status = 'complete' AND embedding IS NOT NULL AND decision != 'dismissed'""",
+            (stamps.map { it.id.toString() } + EYE_VERSION).toTypedArray()).use { row ->
+            while (row.moveToNext()) {
+                cancellation.ensureActive()
+                val index = offsets.getValue(row.getLong(0))
+                loaded[index] = decodeEmbedding(row.getBlob(1), vectors, index * EYE_EMBEDDING_DIMENSIONS)
+            }
+        }
+        return timelineSceneNeighbors(stamps, vectors, loaded, cancellation::ensureActive).mapKeys { it.key.toString() }
     }
 
     private fun links(ids: List<String>): Map<String, List<String>> {

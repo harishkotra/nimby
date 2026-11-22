@@ -6,6 +6,7 @@
   "scripts": {
     "start": "expo start",
     "android": "expo run:android",
+    "android:demo": "cd android && ./gradlew :app:installRelease",
     "typecheck": "tsc --noEmit",
     "product-search": "node --env-file-if-exists=.env server/product-search.mjs"
   },

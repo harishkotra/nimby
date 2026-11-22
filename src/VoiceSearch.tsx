@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState, PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
 import { native } from './gallery';
+import { licenseDemo } from './demoConfig';
 import { ActionLink, Body, Button, IconButton, color, ErrorText, formatBytes, styles } from './ui';
 
 export function VoiceSearch({ onTranscript, active, deferPrompt = false, children }: {
@@ -49,7 +50,7 @@ export function VoiceSearch({ onTranscript, active, deferPrompt = false, childre
   }, [active, phase]);
 
   async function install() {
-    if (!native || busy.current) return;
+    if (licenseDemo || !native || busy.current) return;
     const attempt = ++version.current;
     busy.current = true;
     setPhase('installing');
@@ -97,6 +98,7 @@ export function VoiceSearch({ onTranscript, active, deferPrompt = false, childre
       const { ready, bytes } = await native.voiceStatus();
       if (version.current !== attempt) return;
       if (!ready) {
+        if (licenseDemo) { setError('Voice search needs an installed voice pack. You can still type your search.'); return; }
         setPackBytes(bytes);
         if (deferPrompt) {
           setError('Search once by typing first. Voice download will be ready afterward.');

@@ -1,25 +1,15 @@
 import { ActionMenu } from './ActionSheet';
-import { requireNativeView } from 'expo';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, FlatList, Linking, PermissionsAndroid, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
-import type { NativeSyntheticEvent, ViewProps } from 'react-native';
-import { native as gallery, type MapBounds, type MapPage, type PhotoLocationStatus, type Result } from './gallery';
+import { ActivityIndicator, AppState, FlatList, PermissionsAndroid, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { native as gallery, type MapClusters, type MapPage, type PhotoLocationStatus, type Result } from './gallery';
+import { PhotoMapView, type MapViewport } from './PhotoMapView';
 import { ActionLink, Body, Button, color, ErrorText, Heading, Icon, styles, Thumbnail } from './ui';
 import { useDialog } from './Dialogs';
 
-type Viewport = MapBounds & { zoom: number };
-type Cluster = { id: string; count: number; lat: number; lon: number };
 type MapPhoto = MapPage['photos'][number];
-type MapViewProps = ViewProps & {
-  points: string;
-  fit?: string;
-  onViewport: (event: NativeSyntheticEvent<Viewport>) => void;
-  onCluster: (event: NativeSyntheticEvent<{ id: string }>) => void;
-  onMapError: (event: NativeSyntheticEvent<{ message: string }>) => void;
-};
 type TimeFilter = 'all' | 'year' | 'month';
-type ListScope = { id: string | null; viewport: Viewport };
-const world: Viewport = { south: -90, west: -180, north: 90, east: 180, zoom: 0 };
+type ListScope = { id: string | null; viewport: MapViewport };
+const world: MapViewport = { south: -90, west: -180, north: 90, east: 180, zoom: 0 };
 const allTime: readonly [number | null, number | null] = [null, null];
 const allPhotos: ListScope = { id: null, viewport: world };
 
@@ -32,12 +22,11 @@ function filterRange(filter: TimeFilter): readonly [number | null, number | null
   return [start.getTime(), null];
 }
 
-function boundsArgs(bounds: Viewport, range: readonly [number | null, number | null]) {
+function boundsArgs(bounds: MapViewport, range: readonly [number | null, number | null]) {
   return [bounds.south, bounds.west, bounds.north, bounds.east, bounds.zoom, ...range] as const;
 }
 
 export function PhotoMapScreen({ revision, open }: { revision: number; open: (photo: Result) => void }) {
-  const MapView = useMemo(() => requireNativeView<MapViewProps>('NimbyPhotoMap'), []);
   const show = useDialog();
   const [status, setStatus] = useState<PhotoLocationStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -46,9 +35,9 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
   const [queryError, setQueryError] = useState('');
   const [listError, setListError] = useState('');
   const [filter, setFilter] = useState<TimeFilter>('all');
-  const [viewport, setViewport] = useState<Viewport | null>(null);
-  const [clusters, setClusters] = useState<Cluster[]>([]);
-  const clusterViewport = useRef<Viewport>(world);
+  const [viewport, setViewport] = useState<MapViewport | null>(null);
+  const [clusters, setClusters] = useState<MapClusters['clusters']>([]);
+  const clusterViewport = useRef<MapViewport>(world);
   const [coveredCount, setCoveredCount] = useState(0);
   const [fit, setFit] = useState<string>();
   const [ready, setReady] = useState(false);
@@ -62,10 +51,6 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
   const [retry, setRetry] = useState(0);
   const range = useMemo(() => filterRange(filter), [filter]);
   const active = !!status?.enabled && !!status.permission;
-  const geoJson = useMemo(() => JSON.stringify({ type: 'FeatureCollection', features: active ? clusters.map((point) => ({
-    type: 'Feature', geometry: { type: 'Point', coordinates: [point.lon, Math.max(-85.05112878, Math.min(85.05112878, point.lat))] },
-    properties: { clusterId: point.id, count: point.count },
-  })) : [] }), [active, clusters]);
 
   async function readStatus() {
     if (!gallery?.photoLocationStatus) throw new Error('Install the current Nimby Android build to use Photo Map.');
@@ -217,11 +202,11 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
     setFilter(value);
   }
 
-  function handleViewport(nextViewport: Viewport) {
+  function handleViewport(nextViewport: MapViewport) {
     if (!ready) return;
     setViewport((current) => {
       if (current && Object.keys(nextViewport).every((key) => {
-        const field = key as keyof Viewport;
+        const field = key as keyof MapViewport;
         return Math.abs(current[field] - nextViewport[field]) < 0.0001;
       })) return current;
       return nextViewport;
@@ -269,16 +254,11 @@ export function PhotoMapScreen({ revision, open }: { revision: number; open: (ph
       {mapError ? <View style={layout.message}>
         <ErrorText>{mapError}</ErrorText>
         <Button label="Retry map" subtle run={() => setMapError('')} />
-      </View> : <MapView style={layout.content} points={geoJson} fit={active ? fit : undefined}
-        importantForAccessibility="no-hide-descendants"
-        onViewport={({ nativeEvent }) => { if (active && nativeEvent) handleViewport(nativeEvent); }}
-        onCluster={({ nativeEvent }) => {
-          if (active && clusters.some((item) => item.id === nativeEvent.id)) setScope({ id: nativeEvent.id, viewport: clusterViewport.current });
-        }} onMapError={({ nativeEvent }) => setMapError(nativeEvent.message)} />}
-      <Pressable accessibilityRole="link" accessibilityLabel="OpenStreetMap contributors and license" style={layout.attribution}
-        onPress={() => void Linking.openURL('https://www.openstreetmap.org/copyright').catch(() => {})}>
-        <Text style={layout.attributionText}>© OpenStreetMap contributors</Text>
-      </Pressable>
+      </View> : <PhotoMapView style={layout.content} clusters={active ? clusters : []} fit={active ? fit : undefined}
+        onViewport={(viewport) => { if (active) handleViewport(viewport); }}
+        onCluster={(id) => {
+          if (active && clusters.some((item) => item.id === id)) setScope({ id, viewport: clusterViewport.current });
+        }} onError={setMapError} />}
     </View>}
     <View style={layout.footer}>
       {queryError && active ? <View style={styles.row}><ErrorText>{queryError}</ErrorText>
@@ -308,8 +288,6 @@ const layout = StyleSheet.create({
   thumbnail: { width: 52, height: 52, borderRadius: 8 },
   photoText: { flex: 1, gap: 4 },
   photoName: { color: color.ink, fontSize: 15, fontWeight: '600' },
-  attribution: { position: 'absolute', bottom: 4, right: 8, minHeight: 48, justifyContent: 'flex-end' },
-  attributionText: { padding: 4, color: color.lightText, backgroundColor: color.paper, fontSize: 11 },
   footer: { paddingHorizontal: 20, paddingVertical: 8, paddingBottom: 16, borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule, gap: 8 },
   emptyFooter: { gap: 10 },
   emptyCard: { marginHorizontal: 20, marginBottom: 12, padding: 16, borderRadius: 16, backgroundColor: color.white, gap: 6 },

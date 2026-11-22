@@ -20,3 +20,11 @@ test('browse collections remain in native order', () => {
   const page = { items: [hit('a', []), hit('b', [])], next: null };
   assert.equal(applyRecallFeedback(page, '', new Map([['b', 1]])), page);
 });
+
+test('feedback keeps visual suggestions behind direct evidence', () => {
+  const page = { items: [hit('direct', ['Collection: Coastal walk']), {
+    ...hit('related', ['Visually similar to a match tagged “coastal walk”']), matchKind: 'visual',
+  }], next: null };
+  assert.deepEqual(applyRecallFeedback(page, 'coastal walk', new Map([['related', 50]]))
+    .items.map((item) => item.photo.id), ['direct', 'related']);
+});

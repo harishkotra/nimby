@@ -6,6 +6,7 @@ import { homeLeadAction } from './homeActions';
 import type { NextStepPhoto } from './nextStepFacts';
 import { PhotoTile } from './PhotoGrid';
 import { NimbyMascot } from './NimbyMascot';
+import { QwenModelControls } from './QwenModelControls';
 import {
   ActionLink, Body, Button, color, ErrorText, formatBytes, Heading, Icon, type IconName,
   percent, SectionTitle, styles, Thumbnail, titleCase,
@@ -20,7 +21,7 @@ type Links = {
   gallery: () => void; duplicates: () => void; archive: () => void;
   discover: (mode: Feed, category?: string) => void; recall: () => void; photoMap: () => void;
   connect: () => void; patterns: () => void; parallel: () => void; evolve: () => void;
-  nextSteps: (id?: string | null) => void;
+  nextSteps: (id?: string | null) => void; insights: () => void;
 };
 
 function Action({ label, value, icon, run }: { label: string; value?: string; icon: IconName; run: () => void }) {
@@ -88,8 +89,8 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, discove
         <NimbyMascot state={homeMood} size={112} />
         <View style={layout.mascotCopy}>
           <Body>{data?.localAnalyzed
-            ? `${data.localAnalyzed.toLocaleString()} photos analyzed on this device. Nothing leaves your phone.`
-            : 'Scan your photos on this device to find receipts, screenshots, and other saved references.'}</Body>
+            ? `${data.localAnalyzed.toLocaleString()} photos analyzed on this phone.`
+            : 'Scan your photos on this device to find screenshots, saved references, and more.'}</Body>
         </View>
       </View>
     </View>
@@ -98,16 +99,16 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, discove
       <Pressable accessibilityRole="button" accessibilityLabel="Find a photo" onPress={links.recall}
         style={({ pressed }) => [layout.searchHero, pressed && styles.faded]}>
         <Icon name="search" size={24} tint={color.blue} />
-        <View style={layout.flex}><Heading>Find a photo</Heading><Body>Try “screenshots with text” or a word you remember</Body></View>
+        <View style={layout.flex}><Heading>Find a photo</Heading><Body>Start with a word you remember from a screenshot.</Body></View>
         <Icon name="chevron" tint={color.muted} />
       </Pressable>}
     {discovery?.uri && <View style={layout.section}>
-      <SectionTitle title="Worth revisiting" action="See all picks" run={revisit} />
-      <Pressable accessibilityRole="button" accessibilityLabel={`Open suggested photo, ${discoveryLabel}`}
+      <SectionTitle title={discovery.discoveryReason ? 'Daily discoveries' : 'Worth revisiting'} action="See all picks" run={revisit} />
+      <Pressable accessibilityRole="button" accessibilityLabel={[`Open suggested photo, ${discoveryLabel}`, discovery.discoveryReason].filter(Boolean).join('. ')}
         onPress={() => openPhoto(discovery)} style={({ pressed }) => [layout.feature, pressed && styles.faded]}>
         <Thumbnail uri={discovery.uri} contain style={layout.featurePhoto} />
         <View style={layout.featureCaption}>
-          <View style={layout.flex}><Heading>{discoveryLabel}</Heading><Body>Suggested by Eye</Body></View>
+          <View style={layout.flex}><Heading>{discoveryLabel}</Heading><Body>{discovery.discoveryReason ?? 'Suggested by Eye'}</Body></View>
           <Icon name="chevron" size={18} tint={color.muted} />
         </View>
       </Pressable>
@@ -131,6 +132,7 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, discove
       </View>
       <View style={layout.track}><View style={[layout.fill, { width: widthPercent(coverage ?? 0) }]} /></View>
       {!!awaiting && <Body>{count(awaiting)} still to scan</Body>}
+      <ActionLink label="View gallery insights" run={links.insights} />
     </View>}
     {!!error && <ErrorText>Gallery totals are temporarily unavailable.</ErrorText>}
     <View style={layout.section}>
@@ -151,7 +153,7 @@ export function HomeDashboard({ data, error, scan, pick, busy, previews, discove
     </View>}
     <View style={layout.section}>
       <Heading>Review photos</Heading>
-      {!discovery?.uri && <Action icon="bookmark" label="Worth revisiting" value="A short list of saved references" run={revisit} />}
+      {!discovery?.uri && <Action icon="bookmark" label="Daily discoveries" value="A short list of photos and saved references" run={revisit} />}
       <Action icon="layers" label="Duplicates" value={data ? `${count(data.duplicateGroups)} groups to review` : undefined} run={links.duplicates} />
       <Action icon="map" label="See where photos were taken" run={links.photoMap} />
     </View>
@@ -240,17 +242,30 @@ export function InsightsScreen({ data, error, ...links }: Pick<Links, 'gallery' 
   </ScrollView>;
 }
 
-export function ExploreScreen(links: Pick<Links, 'nextSteps' | 'photoMap' | 'connect' | 'patterns' | 'parallel' | 'evolve'>) {
+export function ExploreScreen({ scanning, premium, ...links }: Pick<Links, 'nextSteps' | 'photoMap' | 'connect' | 'patterns' | 'parallel' | 'evolve' | 'insights'> & {
+  scanning: boolean; premium: boolean;
+}) {
+  const [more, setMore] = useState(true);
   return <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-    <View style={layout.intro}><Heading large>Explore</Heading><Body>Find connections and follow up on what you saved.</Body></View>
-    <View style={layout.section}>
-      <Action icon="bookmark" label="Shopping and receipt follow-ups" run={() => links.nextSteps()} />
+    <View style={layout.intro}><Heading large>Explore</Heading><Body>Follow up on what you saved.</Body></View>
+    <View style={layout.exploreCard}>
+      <QwenModelControls compact scanning={scanning} />
+      <View style={layout.divider} />
+      <Action icon="bookmark" label="Shopping & receipts" value="Compare saved products and follow up on receipts" run={() => links.nextSteps()} />
+    </View>
+    <Pressable accessibilityRole="button" accessibilityState={{ expanded: more }} onPress={() => setMore(!more)}
+      style={({ pressed }) => [layout.disclosure, pressed && styles.faded]}>
+      <Heading>More to explore</Heading>
+      <Icon name={more ? 'up' : 'down'} size={18} tint={color.muted} />
+    </Pressable>
+    {more && <View style={layout.section}>
       <Action icon="map" label="See where photos were taken" run={links.photoMap} />
       <Action icon="clock" label="Timeline" value="Browse related moments" run={links.connect} />
       <Action icon="layers" label="Discover patterns" value="See themes that show up over time" run={links.patterns} />
-      <Action icon="chevron" label="Plan from saved photos" run={links.parallel} />
-      <Action icon="check" label="Review past choices" value="Remember what worked" run={links.evolve} />
-    </View>
+      <Action icon="chevron" label="Plan from saved photos" value={premium ? undefined : 'Lifetime license required'} run={links.parallel} />
+      <Action icon="check" label="Review past choices" value={premium ? 'Remember what worked' : 'Lifetime license required'} run={links.evolve} />
+      <Action icon="insights" label="Gallery insights" value="See scan coverage and storage estimates" run={links.insights} />
+    </View>}
   </ScrollView>;
 }
 
@@ -265,6 +280,9 @@ const layout = StyleSheet.create({
   featureCaption: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 16 },
   nextStep: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, backgroundColor: color.white, borderRadius: 16 },
   nextStepThumb: { width: 56, height: 56, borderRadius: 10 },
+  exploreCard: { backgroundColor: color.white, gap: 12, borderRadius: 16, padding: 16 },
+  divider: { height: StyleSheet.hairlineWidth, backgroundColor: color.rule },
+  disclosure: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, minHeight: 48 },
   flex: { flex: 1 },
   section: { gap: 8 },
   preview: { flexDirection: 'row', gap: 8 },

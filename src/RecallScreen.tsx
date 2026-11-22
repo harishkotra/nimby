@@ -7,7 +7,7 @@ import { ReferenceSearchSheet } from './ReferenceSearchSheet';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
 import {
   emptyRecallRequest, hasRecallRequest, parseRecallQuery, recallCategories, recallDateLabels, recallDateRange,
-  type RecallPage, type RecallRequest, type RecallSearch, type RecallStatus,
+  type RecallPage, type RecallRequest, type RecallSearch, type RecallStatus, type VisualSearchOptions,
 } from './recallQuery';
 import { ActionLink, Body, Button, IconButton, Chip, color, EmptyState, ErrorText, Heading, styles } from './ui';
 
@@ -24,10 +24,12 @@ type Props = {
 };
 
 type Hit = RecallPage['items'][number];
+const sourceNames = { gallery: 'Phone gallery', picker: 'Manually selected photos' } as const;
+
 export function RecallScreen({ revision, open, active, indexed, scan, openMap, search, status, startBackfill }: Props) {
   const [query, setQuery] = useState('');
   const [places, setPlaces] = useState<string[]>([]);
-  const [reference, setReference] = useState<string | null>(null);
+  const [reference, setReference] = useState<{ uri: string; scope: VisualSearchOptions; scopeLabel: string } | null>(null);
   const [picking, setPicking] = useState(false);
   const [pickerError, setPickerError] = useState('');
   const [request, setRequest] = useState<RecallRequest>(emptyRecallRequest);
@@ -36,6 +38,7 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
   const [next, setNext] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState(false);
+  const [photoLocationsNeeded, setPhotoLocationsNeeded] = useState(false);
   const [index, setIndex] = useState<RecallStatus | null>(null);
   const [typedSearchDone, setTypedSearchDone] = useState(false);
   const inFlight = useRef(false);
@@ -43,31 +46,32 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
   const lastSubmitted = useRef('');
 
   const hasRequest = hasRecallRequest(request);
-  const indexFinished = index?.pending === 0 && !index.running;
-  const hasFilters = Boolean(request.category || request.date || request.place || request.textOnly);
+  const indexFinished = index?.pending === 0 && !index.locationsPending && !index.running;
+  const locationsEnabled = index?.locationsEnabled;
+  const hasFilters = Boolean(request.category || request.date || request.place || request.textOnly || request.source);
   const emptyIndex = indexed === 0;
 
   useEffect(() => {
-    if (!status) return;
-    let active = true;
+    if (!active || !status) return;
+    let live = true;
     let timer: ReturnType<typeof setTimeout>;
     const refresh = async () => {
       try {
         const value = await status();
-        if (!active) return;
+        if (!live) return;
         setIndex(value);
-        if (value.pending > 0 || value.running) timer = setTimeout(refresh, 1500);
+        if (value.pending > 0 || value.locationsPending || value.running) timer = setTimeout(refresh, 1500);
       } catch {
-        if (active) setIndex(null);
+        if (live) setIndex(null);
       }
     };
 
     void Promise.resolve().then(startBackfill).catch(() => {}).then(refresh);
     return () => {
-      active = false;
+      live = false;
       clearTimeout(timer);
     };
-  }, [revision, startBackfill, status]);
+  }, [active, revision, startBackfill, status]);
 
   useEffect(() => {
     if (!active) return;
@@ -81,7 +85,13 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
     Keyboard.dismiss();
     setPicking(true);
     setPickerError('');
-    try { setReference(await native.pickReferencePhoto()); }
+    try {
+      const uri = await native.pickReferencePhoto();
+      if (!uri) return;
+      const { date, place, source } = request;
+      const scope = { start: date?.start ?? null, end: date?.end ?? null, month: date?.month ?? null, place, source: source ?? null };
+      setReference({ uri, scope, scopeLabel: [date?.label, place, source && sourceNames[source]].filter(Boolean).join(' · ') });
+    }
     catch { setPickerError('Could not open Android’s photo picker. Try again.'); }
     finally { setPicking(false); }
   }
@@ -100,10 +110,10 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
     setLoading(true);
     setLoadError(false);
     try {
-      const page = await search(request.terms, request.category, request.date?.start ?? null,
-        request.date?.end ?? null, request.place, null, request.textOnly, offset);
+      const page = await search(request, offset);
       if (current !== generation.current) return;
       setItems((previous) => offset === 0 ? page.items : [...previous, ...page.items]);
+      setPhotoLocationsNeeded(page.photoLocationsNeeded === true);
       setNext(page.next);
     } catch {
       if (current === generation.current) setLoadError(true);
@@ -122,9 +132,10 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
     setNext(null);
     setLoading(false);
     setLoadError(false);
+    setPhotoLocationsNeeded(false);
     void loadPage(0);
     return () => { generation.current++; };
-  }, [loadPage, revision, indexFinished]);
+  }, [loadPage, revision, indexFinished, locationsEnabled]);
 
   function submit() {
     Keyboard.dismiss();
@@ -144,6 +155,7 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
       date: parsed.date ?? (request.date?.label !== previous.date?.label ? request.date : null),
       place: parsed.place ?? (request.place !== previous.place ? request.place : null),
       textOnly: parsed.textOnly || (request.textOnly && !previous.textOnly),
+      source: request.source,
     });
   }
 
@@ -163,7 +175,7 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
           value={query}
           onChangeText={setQuery}
           onSubmitEditing={submit}
-          placeholder="Find my electricity bill from last month"
+          placeholder="A word, place, or date you remember"
           placeholderTextColor={color.muted}
           accessibilityLabel="Describe the photos you want to find"
           returnKeyType="search"
@@ -181,7 +193,7 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
       {!hasRequest && <View style={layout.suggestions}>
         <Text style={layout.filterHeading}>Try searching for</Text>
         <View style={styles.row}>
-          {(['receipts', 'beach', 'wedding', 'last month'] as const).map((hint) => (
+          {(['screenshots with text', 'beach', 'wedding'] as const).map((hint) => (
             <Chip key={hint} label={hint} run={() => tryQuery(hint)} />
           ))}
         </View>
@@ -190,6 +202,7 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
         {request.category && <Chip label={request.category} selected remove run={() => setRequest({ ...request, category: null })} />}
         {request.date && <Chip label={request.date.label} selected remove run={() => setRequest({ ...request, date: null })} />}
         {request.place && <Chip label={request.place} selected remove run={() => setRequest({ ...request, place: null })} />}
+        {request.source && <Chip label={sourceNames[request.source]} selected remove run={() => setRequest({ ...request, source: null })} />}
         {request.textOnly && <Chip label="With text" selected remove run={() => setRequest({ ...request, textOnly: false })} />}
         <ActionLink label="Clear filters" run={clearFilters} />
       </View>}
@@ -213,7 +226,7 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
           </View>
           <Text style={layout.filterHeading}>Place</Text>
           <TextInput value={draft.place ?? ''} onChangeText={(place) => setDraft({ ...draft, place })}
-            placeholder="Saved place name" placeholderTextColor={color.muted} accessibilityLabel="Saved place name"
+            placeholder="City or saved place" placeholderTextColor={color.muted} accessibilityLabel="City or saved place"
             maxLength={80} returnKeyType="done" style={layout.input} />
           {!!places.length && <View style={styles.row}>
             {places.filter((name) => !draft.place || name.toLowerCase().includes(draft.place.trim().toLowerCase())).slice(0, 6)
@@ -221,12 +234,20 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
                 run={() => setDraft({ ...draft, place: draft.place === name ? null : name })} />)}
           </View>}
           <ActionLink label="Browse GPS locations on Photo Map" run={() => { setDraft(null); openMap(); }} />
+          {!!native?.searchReferencePhotoScoped && <>
+            <Text style={layout.filterHeading}>Photo source</Text>
+            <View style={styles.row}>
+              <Chip label="Any source" selected={!draft.source} run={() => setDraft({ ...draft, source: null })} />
+              {(['gallery', 'picker'] as const).map((source) => <Chip key={source} label={sourceNames[source]}
+                selected={draft.source === source} run={() => setDraft({ ...draft, source })} />)}
+            </View>
+          </>}
           <View style={styles.row}><Chip label="Only photos with text" selected={draft.textOnly}
             run={() => setDraft({ ...draft, textOnly: !draft.textOnly })} /></View>
         </View>
       </ActionSheet>}
-      {active && reference && <ReferenceSearchSheet key={reference} uri={reference} close={() => setReference(null)} open={open} search={tryQuery} />}
-      {index && (index.running || index.pending > 0) && <Text style={styles.body} accessibilityLiveRegion="polite">
+      {active && reference && <ReferenceSearchSheet key={reference.uri} {...reference} close={() => setReference(null)} open={open} search={tryQuery} />}
+      {index && (index.running || index.pending > 0 || !!index.locationsPending) && <Text style={styles.body} accessibilityLiveRegion="polite">
         {index.running ? 'Updating your photo index. Available matches appear below.' : 'Some photos are still waiting to be indexed.'}
       </Text>}
       {loadError && <ErrorText>Search is temporarily unavailable.</ErrorText>}
@@ -243,10 +264,10 @@ export function RecallScreen({ revision, open, active, indexed, scan, openMap, s
     onEndReached={() => { if (active && !emptyIndex && next !== null && !loadError) void loadPage(next); }}
     ListEmptyComponent={!emptyIndex && hasRequest && !loading && !loadError
       ? <EmptyState icon="image" mascot="thinking" title="No matches"
-        text={hasFilters
+        text={photoLocationsNeeded ? 'Enable photo locations in Photo Map to match this place using your photos’ GPS data.' : hasFilters
           ? `No photos matched${request.category ? ` in ${request.category}` : ''}${request.terms ? ` for “${request.terms}”` : ''}. Clear a filter or try a broader word.`
           : 'Try a different word you remember from the photo.'}
-        action={hasFilters ? <ActionLink label={request.category ? `Clear ${request.category} filter` : 'Clear filters'}
+        action={photoLocationsNeeded ? <ActionLink label="Open Photo Map" run={openMap} /> : hasFilters ? <ActionLink label={request.category ? `Clear ${request.category} filter` : 'Clear filters'}
           run={request.category ? () => setRequest({ ...request, category: null }) : clearFilters} /> : undefined} />
       : undefined}
     ListFooterComponent={emptyIndex ? undefined : loading

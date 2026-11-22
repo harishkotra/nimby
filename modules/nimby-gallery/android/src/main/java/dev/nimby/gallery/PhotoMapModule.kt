@@ -37,6 +37,7 @@ class PhotoMapModule : Module() {
             Events("onViewport", "onCluster", "onMapError")
             Prop("points") { view: PhotoMapView, points: String -> view.renderPoints(points) }
             Prop("fit") { view: PhotoMapView, bounds: String? -> view.fitPhotos(bounds) }
+            Prop("lockViewport") { view: PhotoMapView, locked: Boolean? -> view.lockViewport(locked == true) }
         }
     }
 }
@@ -68,6 +69,7 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
     private var points: String? = null
     private var fit: String? = null
     private var pendingFit = true
+    private var viewportLocked = false
     private val mapLayoutListener = OnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
         if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
             applyFit()
@@ -92,6 +94,7 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
         surface.getMapAsync { loaded ->
             if (mapView !== surface) return@getMapAsync
             map = loaded
+            applyViewportLock()
             loaded.addOnCameraIdleListener { emitViewport() }
             loaded.addOnMapClickListener { coordinate ->
                 val p = loaded.projection.toScreenLocation(coordinate)
@@ -162,6 +165,20 @@ internal class PhotoMapView(context: Context, appContext: AppContext) : ExpoView
         fit = value
         pendingFit = true
         applyFit()
+    }
+
+    fun lockViewport(locked: Boolean) {
+        viewportLocked = locked
+        applyViewportLock()
+    }
+
+    private fun applyViewportLock() {
+        map?.uiSettings?.apply {
+            isScrollGesturesEnabled = !viewportLocked
+            isZoomGesturesEnabled = !viewportLocked
+            isDoubleTapGesturesEnabled = !viewportLocked
+            isQuickZoomGesturesEnabled = !viewportLocked
+        }
     }
 
     private fun applyFit() {

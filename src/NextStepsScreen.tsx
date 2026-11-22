@@ -2,10 +2,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, FlatList, Linking, PermissionsAndroid, Platform, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ActionMenu, ActionSheet } from './ActionSheet';
 import { useDialog } from './Dialogs';
-import { native, type ProductVisionStatus, type FollowUpAction, type Result } from './gallery';
+import { native, type FollowUpAction, type Result } from './gallery';
 import { dateInput, localDate, receiptFacts, receiptSuggestion, type ReceiptSuggestion, relatedShopping, reminderDate, shoppingFacts, type NextStepKind, type NextStepPhoto } from './nextStepFacts';
 import { PhotoTile } from './PhotoGrid';
 import { ProductSearchSheet } from './ProductSearchSheet';
+import { licenseDemo } from './demoConfig';
 import { ReadingStatus } from './ReadingStatus';
 import { ActionLink, Body, Button, color, EmptyState, ErrorText, Heading, Segments, styles } from './ui';
 
@@ -23,49 +24,6 @@ function details(item: NextStepPhoto) {
 async function requestNotifications() {
   if (Platform.OS !== 'android' || Number(Platform.Version) < 33) return true;
   return await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS) === PermissionsAndroid.RESULTS.GRANTED;
-}
-
-function ModelControls({ status, refresh, scanning }: { status: ProductVisionStatus; refresh: () => void; scanning: boolean }) {
-  const show = useDialog();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  async function update(install: boolean) {
-    setBusy(true);
-    setError('');
-    try {
-      if (install) await native?.installProductVision?.();
-      else await native?.removeProductVision?.();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : install ? 'Could not download Qwen.' : 'Could not remove Qwen.');
-    } finally { setBusy(false); refresh(); }
-  }
-  const downloading = status.phase === 'downloading';
-  useEffect(() => {
-    if (!busy && status.phase === 'idle') return;
-    const timer = setInterval(refresh, 700);
-    return () => clearInterval(timer);
-  }, [busy, refresh, status.phase]);
-  const progress = Math.min(100, Math.floor(100 * status.received / status.total));
-
-  return <View style={layout.panel}>
-    <Heading>Qwen vision</Heading>
-    <Body>{status.supported ? status.installed ?
-      'Downloaded. Reads product screenshots and reviews receipts on this phone.' :
-      'This optional download reads product screenshots and reviews receipts on your phone.' :
-      'Qwen needs a compatible 64-bit Android phone with enough memory.'}</Body>
-    {!!error && <ErrorText>{error}</ErrorText>}
-    {downloading ? <View style={styles.row}>
-      <Text accessibilityRole="progressbar" accessibilityValue={{ min: 0, max: 100, now: progress }} style={styles.body}>
-        Downloading · {progress}%
-      </Text>
-      <ActionLink label="Cancel download" run={() => native?.cancelProductVisionDownload?.()} />
-    </View> : status.supported && (status.installed ?
-      <ActionLink label="Remove download" danger disabled={busy || status.phase !== 'idle'} run={() => show({
-        title: 'Remove Qwen?', message: 'This frees model storage. Your photos and reminders stay in Nimby.',
-        action: { label: 'Remove download', destructive: true, run: () => void update(false) },
-      })} /> : <ActionLink label={busy ? 'Preparing download…' : 'Download Qwen · 1.3 GB'}
-        disabled={busy || scanning} run={() => void update(true)} />)}
-  </View>;
 }
 
 export function NextStepsScreen({ revision, target, scanning, open, changed }: {
@@ -121,7 +79,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
   }, [revision, retry, target]);
 
   if (!native?.nextSteps) return <View style={styles.content}>
-    <Heading large>Next steps</Heading><Body>Install the updated Android build to use shopping and receipt follow-ups.</Body>
+    <Heading large>Shopping &amp; receipts</Heading><Body>Install the updated Android build to use shopping and receipt follow-ups.</Body>
   </View>;
 
   const scoped = items.filter((item) => item.kind === kind);
@@ -198,6 +156,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
   }
 
   function openListing(item: NextStepPhoto) {
+    if (licenseDemo) return;
     const saved = shoppingFacts(item.text).url;
     if (!saved) return;
     show({ title: 'Open link from screenshot?', message: `Open ${saved.host} in your browser? Confirm the address there before buying.`,
@@ -221,22 +180,19 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
       numColumns={comparing ? 2 : 1} columnWrapperStyle={comparing ? layout.compareRow : undefined}
       contentContainerStyle={styles.content} ListHeaderComponent={<View style={styles.column}>
         <View style={styles.between}>
-          <Heading large>{comparing ? 'Compare options' : 'Next steps'}</Heading>
-          {comparing ? <ActionLink label="Done comparing" run={() => setComparing(false)} /> :
-            <ActionLink label={options ? 'Close options' : 'Options'} run={() => setOptions(!options)} />}
+          <Heading large>{comparing ? 'Compare options' : 'Shopping & receipts'}</Heading>
+          {comparing ? <ActionLink label="Done comparing" run={() => setComparing(false)} /> : notifications &&
+            <ActionLink label={options ? 'Close notifications' : 'Notifications'} run={() => setOptions(!options)} />}
         </View>
         {comparing ? <Body>Prices and names come from the saved screenshots. Open each image to verify details.</Body> : <>
           <Segments options={sections} value={kind} select={select} />
-          {options && <View style={styles.column}>
-            {model && <ModelControls status={model} refresh={refreshModel} scanning={scanning} />}
-            {notifications && <View style={layout.panel}>
-              <Heading>Shopping notifications</Heading>
-              <Body>{notifications.shopping ? notifications.shoppingAvailable ? 'On · at most one notification a week for new shopping references' :
-                'Paused by Android notification settings' :
-                'Off · shopping suggestions still appear in Nimby'}</Body>
-              <ActionLink label={notifications.shopping ? 'Turn off shopping notifications' : 'Enable shopping notifications'}
-                disabled={busy} run={() => void setShoppingNotifications(!notifications.shopping)} />
-            </View>}
+          {options && notifications && <View style={layout.panel}>
+            <Heading>Shopping notifications</Heading>
+            <Body>{notifications.shopping ? notifications.shoppingAvailable ? 'On · at most one notification a week for new shopping references' :
+              'Paused by Android notification settings' :
+              'Off · shopping suggestions still appear in Nimby'}</Body>
+            <ActionLink label={notifications.shopping ? 'Turn off shopping notifications' : 'Enable shopping notifications'}
+              disabled={busy} run={() => void setShoppingNotifications(!notifications.shopping)} />
           </View>}
           <View style={styles.between}>
             <Body>{selection ? `${selection.length} of 4 selected` : kind === 'shopping' ? 'Saved products to revisit' : 'Receipts to file or follow up'}</Body>
@@ -257,7 +213,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
         if (comparing) return <View style={layout.compareTile}>
           <PhotoTile uri={item.photo.uri} label={`Open ${info.title}`} contain ratio={0.85} press={() => open(item.photo)} />
           <Heading>{info.title}</Heading>{!!info.caption && <Body>{info.caption}</Body>}
-          <ActionLink label="Find buying links" run={() => setSearchProduct(item)} />
+          {!licenseDemo && <ActionLink label="Find buying links" run={() => setSearchProduct(item)} />}
         </View>;
         return <View style={layout.panel}>
           <View style={layout.photoRow}>
@@ -274,7 +230,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
           {!selection && <ActionLink label={expanded ? 'Close follow-up' : 'Review next steps'}
             run={() => { setActiveId(expanded ? null : item.photo.id); setError(''); }} />}
           {expanded && <View style={styles.column}>
-            {item.kind === 'shopping' ? <Button label="Find buying links" icon="search" run={() => setSearchProduct(item)} /> :
+            {item.kind === 'shopping' ? !licenseDemo && <Button label="Find buying links" icon="search" run={() => setSearchProduct(item)} /> :
               <Button label={item.state ? 'Change reminder' :
               item.kind === 'receipt' && receiptFacts(item.text).returnBy ? 'Set return reminder' : 'Set reminder'} run={() => startReminder(item)} />}
             <View style={layout.followUpActions}>
@@ -291,7 +247,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
                   { label: 'Keep for reimbursement', run: () => fileReceipt(item) },
                   { label: 'Mark follow-up complete', run: () => void save(item, 'done') },
                 ] : []),
-                ...(item.kind === 'shopping' && shoppingFacts(item.text).url ? [{ label: 'Open saved link', run: () => openListing(item) }] : []),
+                ...(!licenseDemo && item.kind === 'shopping' && shoppingFacts(item.text).url ? [{ label: 'Open saved link', run: () => openListing(item) }] : []),
                 { label: 'Dismiss suggestion', run: () => void save(item, 'dismissed') },
               ]} />
             </View>
@@ -323,7 +279,7 @@ export function NextStepsScreen({ revision, target, scanning, open, changed }: {
         {!!error && <ErrorText>{error}</ErrorText>}
       </View>
     </ActionSheet>}
-    {searchProduct && <ProductSearchSheet key={searchProduct.photo.id} imageId={searchProduct.photo.id}
+    {!licenseDemo && searchProduct && <ProductSearchSheet key={searchProduct.photo.id} imageId={searchProduct.photo.id}
       screenshotText={searchProduct.text} close={() => { setSearchProduct(null); refreshModel(); }} />}
   </View>;
 }

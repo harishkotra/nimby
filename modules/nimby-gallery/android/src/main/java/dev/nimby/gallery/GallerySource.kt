@@ -119,6 +119,20 @@ internal class GallerySource(private val context: Context) {
             buildList { while (size < limit && row.moveToNext()) add(mediaPhoto(row)) }
         }
 
+    fun changeToken(): String? {
+        if (!generationAware || access() != "full") return null
+        return try {
+            val volumes = MediaStore.getExternalVolumeNames(context).sorted()
+            if (volumes.isEmpty()) return null
+            volumes.map { volume ->
+                val version = MediaStore.getVersion(context, volume)
+                "$volume:$version:${MediaStore.getGeneration(context, volume)}"
+            }.joinToString("\n")
+        } catch (_: RuntimeException) {
+            null
+        }
+    }
+
     fun count(buckets: List<String>): Int = query(buckets, projection = listOf(Media._ID)).use { it.count }
 
     fun forEachPhoto(visit: (Photo) -> Unit) {

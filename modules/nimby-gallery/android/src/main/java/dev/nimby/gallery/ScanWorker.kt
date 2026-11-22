@@ -10,10 +10,12 @@ import com.googlecode.tesseract.android.TessBaseAPI
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -31,11 +33,12 @@ import java.util.zip.ZipFile
 internal data class ScanProgress(
     val runId: Int = 0, val phase: String = "idle", val total: Int = 0, val processed: Int = 0, val analyzed: Int = 0,
     val cached: Int = 0, val failed: Int = 0, val errors: List<String> = emptyList(), val problem: String? = null,
-    val resultId: String? = null
+    val resultId: String? = null, val automatic: Boolean = false
 ) {
     fun bridge() = mapOf(
         "runId" to runId, "phase" to phase, "total" to total, "processed" to processed, "analyzed" to analyzed,
-        "cached" to cached, "failed" to failed, "errors" to errors, "problem" to problem, "resultId" to resultId
+        "cached" to cached, "failed" to failed, "errors" to errors, "problem" to problem, "resultId" to resultId,
+        "automatic" to automatic
     )
 }
 
@@ -136,10 +139,12 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
         }
     }
 
-    fun memoryStatus(): Map<String, Any?> = mapOf(
-        "pending" to memory.pendingOcrCount(),
-        "running" to ocrRunning
-    )
+    fun memoryStatus(): Map<String, Any?> {
+        val locationsEnabled = photoLocationsAvailable()
+        return mapOf("pending" to memory.pendingOcrCount(), "locationsEnabled" to locationsEnabled,
+            "locationsPending" to if (locationsEnabled) memory.pendingLocationCount() else 0,
+            "running" to (ocrRunning || locating))
+    }
 
     suspend fun readShoppingText(id: Long): String? = ocrLock.withLock {
         val target = memory.shoppingOcrTarget(id) ?: return null
@@ -172,26 +177,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                     }
                     locating = false
                 }
-                if (memory.pendingOcrCount() == 0) return@launch
-                ocrRunning = true
-                ReceiptOcr(context).use { ocr ->
-                    var after = 0L
-                    while (true) {
-                        val page = memory.pendingOcrPage(after)
-                        if (page.isEmpty()) break
-                        for (target in page) {
-                            currentCoroutineContext().ensureActive()
-                            ocrLock.withLock {
-                                val uri = memory.available(target.id) ?: return@withLock
-                                val text = ocr.recognize(uri)
-                                currentCoroutineContext().ensureActive()
-                                if (text != null) memory.saveOcr(target, text)
-                            }
-                            yield()
-                        }
-                        after = page.last().id
-                    }
-                }
+                indexPendingText()
             } catch (error: CancellationException) {
                 throw error
             } catch (_: Exception) {
@@ -203,6 +189,56 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                 ocrRunning = false
             }
         }
+    }
+
+    private suspend fun indexPendingText() {
+        if (memory.pendingOcrCount() == 0) return
+        ocrRunning = true
+        try {
+            ReceiptOcr(context).use { ocr ->
+                var after = 0L
+                while (true) {
+                    val page = memory.pendingOcrPage(after)
+                    if (page.isEmpty()) break
+                    for (target in page) {
+                        currentCoroutineContext().ensureActive()
+                        indexText(ocr, target)
+                        yield()
+                    }
+                    after = page.last().id
+                }
+            }
+        } finally { ocrRunning = false }
+    }
+
+    private suspend fun indexText(ocr: ReceiptOcr, target: PendingOcr, source: String? = null) = ocrLock.withLock {
+        val uri = memory.available(target.id, source) ?: return@withLock
+        val text = ocr.recognize(uri)
+        currentCoroutineContext().ensureActive()
+        if (text != null) memory.saveOcr(target, text)
+    }
+
+    private suspend fun indexAutomaticText(batch: AutoScanBatch) {
+        if (gallery.access() != batch.access) return
+        val excluded = memory.excludedAlbums().mapNotNull { it["id"] }.toSet()
+        val targets = batch.photos.asSequence().filter { it.bucket !in excluded }.mapNotNull { photo ->
+            memory.pendingOcrSource(photo)?.let { it to photo.uri.toString() }
+        }.distinctBy { it.first.id }.take(8).toList()
+        if (targets.isEmpty()) return
+        ocrRunning = true
+        try {
+            ReceiptOcr(context).use { ocr ->
+                for ((target, uri) in targets) {
+                    currentCoroutineContext().ensureActive()
+                    if (gallery.access() != batch.access) break
+                    indexText(ocr, target, uri)
+                }
+            }
+        }
+        catch (error: CancellationException) { throw error }
+        catch (error: Exception) { Log.w("NimbyMemory", "Automatic text indexing will retry later.", error) }
+        catch (error: LinkageError) { Log.w("NimbyMemory", "The local text recognizer could not be loaded.", error) }
+        finally { ocrRunning = false }
     }
 
     private suspend fun indexPhotoLocation(uri: Uri, version: String) {
@@ -222,11 +258,11 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
 
     fun processing() = memory.processing(currentScanId)
     fun overview() = memory.overview(currentScanId)
-    @Synchronized fun resumeInterrupted() {
-        check(!busy()) { "Finish the current operation before resuming." }
+    suspend fun resumeInterrupted() {
+        yieldAutoScan()
         val (albums, uris) = memory.interruptedScope() ?: error("No interrupted scan is available.")
         check(uris.isNotEmpty() || gallery.access() != "none") { "Allow gallery access before resuming this scan." }
-        start(albums, uris)
+        startManual(albums, uris)
     }
 
     @Synchronized
@@ -263,7 +299,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                 eyeLoaded = true
                 val bitmap = decodePhoto(context.contentResolver, uri)
                 val output = try { infer(engine, bitmap) } finally { bitmap.recycle() }
-                return checkNotNull(output.embedding?.takeIf { it.size == 512 && it.all(Float::isFinite) }) {
+                return checkNotNull(output.embedding?.takeIf { it.size == EYE_EMBEDDING_DIMENSIONS && it.all(Float::isFinite) }) {
                     "Eye couldn’t create a visual match for this photo."
                 }
             }
@@ -297,7 +333,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                 val latency = SystemClock.elapsedRealtime() - started
                 step = "Result validation"
                 val embedding = output.embedding
-                check(embedding != null && embedding.size == 512 && embedding.all(Float::isFinite) &&
+                check(embedding != null && embedding.size == EYE_EMBEDDING_DIMENSIONS && embedding.all(Float::isFinite) &&
                     output.confidences.values.any { it in 0.0..1.0 }) { "Eye didn’t return usable photo analysis data." }
                 result = EyeCheck("passed", latency)
             }
@@ -320,28 +356,62 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
     fun status() = progress.value.bridge()
     @Synchronized fun busy() = task?.isCompleted == false || eyeCheck.phase == "running"
 
+    suspend fun yieldAutoScan() {
+        val automatic = synchronized(this) { task?.takeIf { progress.value.automatic && !it.isCompleted } }
+        automatic?.cancelAndJoin()
+    }
+
+    suspend fun startManual(buckets: List<String>, uris: List<String>) {
+        yieldAutoScan()
+        synchronized(this) {
+            check(eyeCheck.phase != "running") { "Wait for the Eye check to finish before scanning." }
+            check(task?.isCompleted != false) { "A scan is already active." }
+            startTask(false) { scan(buckets.distinct(), uris.distinct()) }
+        }
+    }
+
     @Synchronized
-    fun start(buckets: List<String>, uris: List<String>) {
-        check(eyeCheck.phase != "running") { "Wait for the Eye check to finish before scanning." }
-        check(task?.isCompleted != false) { "A scan is already active." }
+    fun startAutomatic(select: suspend () -> AutoScanBatch): Deferred<Pair<AutoScanBatch, ScanProgress>>? {
+        if (busy()) return null
+        return startTask(true) {
+            val batch = select()
+            if (batch.photos.isEmpty()) {
+                memory.refreshDuplicateLinks(48)
+                finish("complete")
+            } else scan(emptyList(), emptyList(), batch)
+            batch to progress.value
+        }
+    }
+
+    // Both admission paths hold the scanner monitor while assigning the new task.
+    private fun <T> startTask(automatic: Boolean, run: suspend () -> T): Deferred<T> {
         paused.value = false
         runtimeError = null
-        progress.value = ScanProgress(runId = progress.value.runId + 1, phase = "preparing")
+        progress.value = ScanProgress(runId = progress.value.runId + 1, phase = "preparing", automatic = automatic)
         val metadata = metadataTask
         metadata?.cancel()
-        val current = scope.launch(start = CoroutineStart.LAZY) {
-            metadata?.join()
-            scan(buckets.distinct(), uris.distinct())
+        val current = scope.async(start = CoroutineStart.LAZY) {
+            try {
+                metadata?.join()
+                run()
+            } catch (error: CancellationException) {
+                finish("cancelled")
+                throw error
+            } catch (error: Exception) {
+                finish("blocked", "Nimby could not check the gallery.")
+                throw error
+            }
         }
         task = current
-        current.invokeOnCompletion { requestMemoryBackfill() }
+        if (!automatic) current.invokeOnCompletion { requestMemoryBackfill() }
         current.start()
+        return current
     }
 
     @Synchronized
     fun control(action: String) {
         when (action) {
-            "pause" -> if (progress.value.phase in setOf("preparing", "running")) {
+            "pause" -> if (!progress.value.automatic && progress.value.phase in setOf("preparing", "running")) {
                 paused.value = true
                 progress.update { it.copy(phase = "paused") }
             }
@@ -356,19 +426,18 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
         }
     }
 
-    fun destroy() = scope.cancel()
-
-    private suspend fun scan(buckets: List<String>, uris: List<String>) {
+    private suspend fun scan(buckets: List<String>, uris: List<String>, automatic: AutoScanBatch? = null) {
         var eye: EyeEngine? = null
         val loggedFailures = mutableSetOf<String>()
         var historyId: Long? = null
         try {
-            historyId = memory.beginScan(buckets, uris)
+            historyId = memory.beginScan(buckets, uris, automatic != null)
             currentScanId = historyId
             progress.update { it.copy(resultId = historyId.toString()) }
             val scopes = if (buckets.isEmpty()) listOf(emptyList()) else buckets.chunked(100)
             val excluded = if (buckets.isEmpty() && uris.isEmpty()) memory.excludedAlbums().mapNotNull { it["id"] }.toSet() else emptySet()
             val count = when {
+                automatic != null -> automatic.photos.size
                 uris.isNotEmpty() -> uris.size
                 excluded.isEmpty() -> scopes.sumOf { gallery.count(it) }
                 else -> {
@@ -390,6 +459,7 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
             suspend fun process(uri: Uri, known: Photo?) {
                 paused.first { !it }
                 currentCoroutineContext().ensureActive()
+                if (automatic != null && gallery.access() != automatic.access) throw SecurityException("Gallery access changed.")
                 var photo = known
                 var id: Long? = null
                 var stage = "index"
@@ -460,7 +530,9 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
                 }
             }
 
-            if (uris.isNotEmpty()) {
+            if (automatic != null) {
+                automatic.photos.filter { it.bucket !in excluded }.forEach { process(it.uri, it) }
+            } else if (uris.isNotEmpty()) {
                 uris.forEach { process(Uri.parse(it), null) }
             } else for (scope in scopes) {
                 var before = Long.MAX_VALUE
@@ -493,7 +565,8 @@ internal class ScanWorker(private val context: Context, private val gallery: Gal
             currentCoroutineContext().ensureActive()
             paused.first { !it }
             progress.update { if (it.phase != "cancelled") it.copy(phase = "matching") else it }
-            memory.refreshDuplicateLinks()
+            memory.refreshDuplicateLinks(if (automatic == null) Int.MAX_VALUE else 48)
+            if (automatic != null) indexAutomaticText(automatic)
             finish("complete")
             if (progress.value.analyzed > 0) runCatching { NextStepNotifications(context).offerShoppingDigest() }
         } catch (error: CancellationException) {

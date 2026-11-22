@@ -43,6 +43,7 @@ def migrate(db):
     run(db, body("private fun addInsightColumns", "private fun createArchiveTables"))
     run(db, body("private fun addScanScope", "private fun addInsightColumns"))
     run(db, body("private fun createScanResults", "private fun addScanScope"))
+    run(db, body("private fun addDailyDiscoveries", "private fun createVisualSearchIndex"))
 
 
 def test_storage():
@@ -103,6 +104,36 @@ def test_deletion_wiring():
     assert "current.version == item.version" in MEMORY
     assert "gallery.confirmAbsent" in MEMORY
     assert "contentResolver.delete(" not in BRIDGE
+
+
+def test_auto_scan_storage():
+    db = connect(":memory:")
+    run(db, body("override fun onCreate", "override fun onUpgrade"))
+    migrate(db)
+    db.execute("INSERT INTO images(id,fingerprint,status,engine) VALUES(1,'hash','complete','4.3.0')")
+    db.executemany("""INSERT INTO sources(uri,image_id,name,album,bucket,source,media_id,captured,width,height,bytes,modified,version)
+        VALUES (?,1,'Photo','Camera','external|1','gallery',?,0,384,384,100,0,'indexed')""", [
+        ("content://unchanged", 1), ("content://edited", 2), ("content://archived", 3),
+    ])
+    db.execute("INSERT INTO archive VALUES('content://archived','Photo','Camera',100,'indexed',1,2592000001,0)")
+    versions = {"content://unchanged": "indexed", "content://edited": "updated", "content://archived": "updated", "content://new": "new"}
+    placeholders = ",".join("?" for _ in versions)
+    cache = re.search(r'fun cachedPhotos.*?rawQuery\("""(.*?)"""', MEMORY, re.S).group(1).replace("$keys", placeholders)
+    archived_sql = re.search(r'fun pendingAutoScanPhotos.*?rawQuery\("(.*?)"', MEMORY, re.S).group(1).replace("$slots", placeholders)
+    cached = {uri for uri, version in db.execute(cache, ("4.3.0", *versions)) if versions[uri] == version}
+    archived = {row[0] for row in db.execute(archived_sql, tuple(versions))}
+    assert set(versions) - cached - archived == {"content://edited", "content://new"}
+
+    completed = re.search(r'fun hasCompletedScan.*?rawQuery\(\s*"(.*?)"', MEMORY, re.S).group(1)
+    db.execute("INSERT INTO scans(started,phase,total,failed) VALUES(1,'complete',2,2)")
+    assert not db.execute(completed).fetchone()
+    db.execute("INSERT INTO scans(started,phase,total,cached) VALUES(2,'complete',1,1)")
+    assert db.execute(completed).fetchone()
+    db.execute("INSERT INTO scans(started,phase,scope) VALUES(3,'interrupted','{\"albums\":[],\"uris\":[]}')")
+    db.execute("INSERT INTO scans(started,phase,total,analyzed) VALUES(4,'complete',1,1)")
+    resume = re.search(r'fun interruptedScope.*?rawQuery\("""(.*?)"""', MEMORY, re.S).group(1)
+    assert db.execute(resume).fetchone() == ('{"albums":[],"uris":[]}', "interrupted")
+    db.close()
     assert "Permanently delete these originals?" in ARCHIVE_UI
     assert "Continue to Android" in ARCHIVE_UI
     assert "action?.run()" in DIALOG_UI
@@ -177,9 +208,65 @@ def test_revisit_queries():
     assert db.execute(pick_query.replace("$eligible", eligible), (104, "Screenshots")).fetchone()[0] == 103
 
 
+def test_daily_discoveries():
+    with tempfile.TemporaryDirectory() as folder:
+        path = str(Path(folder) / "daily.sqlite")
+        db = connect(path)
+        run(db, body("override fun onCreate", "override fun onUpgrade"))
+        migrate(db)
+        db.execute("CREATE TABLE memory_details(image_id INTEGER PRIMARY KEY, qwen_tags TEXT)")
+        db.executemany("""INSERT INTO images(id,fingerprint,kind,category,decision,status,analyzed,decided_at)
+            VALUES (?1,?1,'photo',?2,?3,'complete',10,?4)""", [
+            (1, "Receipts", "kept", 35), (2, "Screenshots", "dismissed", 20),
+            (3, "Documents", "kept", 25), (4, None, "new", 0), (5, "Screenshots", "new", 0),
+        ])
+        db.executemany("""INSERT INTO sources(uri,image_id,name,album,bucket,source,media_id,captured,width,height,bytes,modified,version)
+            VALUES (?,?,'Photo','Camera','camera','gallery',0,0,384,384,10,0,'v1')""",
+            [(f"content://{image}", image) for image in range(1, 6)])
+        db.execute("INSERT INTO archive VALUES('content://3','Photo','Camera',10,'v1',40,50,0)")
+        db.execute("INSERT INTO memory_details VALUES (1, '[\"coffee\"]')")
+        review_category = re.search(r'private val reviewCategory = """(.*?)"""', MEMORY, re.S).group(1)
+        visible = re.search(r'private val visible = """(.*?)"""', MEMORY, re.S).group(1)
+        daily_visible = re.search(r'private val dailyVisible = """(.*?)"""', MEMORY, re.S).group(1).replace('$visible', visible)
+        history = re.search(r'private fun discoveryFeedback.*?rawQuery\("""(.*?)"""', MEMORY, re.S).group(1)
+        history = history.replace('$reviewCategory', review_category)
+        assert [(row[0], row[2], row[3]) for row in db.execute(history)] == [
+            ('Documents', None, 'archived'), ('Receipts', '["coffee"]', 'kept'), ('Screenshots', None, 'dismissed'),
+        ]
+        db.execute("DELETE FROM archive WHERE uri='content://3'")
+        assert [row[3] for row in db.execute(history)] == ['kept', 'kept', 'dismissed']
+
+        db.executemany("INSERT INTO daily_discoveries VALUES('2026-11-22',?,?,?)", [
+            (0, 4, 'From your scanned gallery'), (1, 5, 'From your scanned gallery'),
+        ])
+        generation = body("private fun chooseDailyDiscoveries", "private fun discoveryFeedback")
+        eligible = re.search(r'val eligible = """(.*?)"""', generation, re.S).group(1).replace('$dailyVisible', daily_visible)
+        pool = re.search(r'rawQuery\("""(SELECT images.id.*?)"""', generation, re.S).group(1)
+        pool = pool.replace('$eligible', eligible).replace('$reviewCategory', review_category)
+        assert db.execute(pool, ('2026-10-01', '2026-11-23', 'Photos')).fetchone()[:4] == (4, None, None, '2026-11-22')
+        db.commit()
+        db.close()
+        db = connect(path)
+        pick = re.search(r'SELECT images.id, images.kind, images.confidence, images.tags, \$reviewCategory, d.reason(.*?)"""', MEMORY, re.S).group(0)[:-3]
+        pick = pick.replace('$reviewCategory', review_category).replace('$dailyVisible', daily_visible)
+        assert [row[0] for row in db.execute(pick, ('2026-11-22',))] == [4, 5]
+        db.execute("UPDATE images SET decision='dismissed' WHERE id=4")
+        assert [row[0] for row in db.execute(pick, ('2026-11-22',))] == [5]
+        db.execute("INSERT INTO archive VALUES('content://5','Photo','Camera',10,'v1',40,50,0)")
+        assert not list(db.execute(pick, ('2026-11-22',)))
+        assert not list(db.execute(pool, ('2026-10-01', '2026-11-23', 'Screenshots')))
+        assert scalar(db, "SELECT COUNT(*) FROM daily_discoveries") == 2
+        db.execute("DELETE FROM sources WHERE image_id=5")
+        db.execute("DELETE FROM images WHERE id=5")
+        assert scalar(db, "SELECT COUNT(*) FROM daily_discoveries") == 1
+        db.close()
+
+
 if __name__ == "__main__":
     test_storage()
     test_deletion_wiring()
+    test_auto_scan_storage()
     test_scan_results()
     test_revisit_queries()
-    print("Migration, scan scope, revisit ranking, archive/restore, cache, and deletion authorization wiring passed")
+    test_daily_discoveries()
+    print("Migration, scan scopes, Auto-scan, revisit ranking, daily discovery persistence, archive/restore, and deletion authorization wiring passed")

@@ -14,31 +14,43 @@ import expo.modules.kotlin.functions.Queues
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.File
 
 class GalleryModule : Module() {
     private val context get() = requireNotNull(appContext.reactContext).applicationContext
-    private val gallery by lazy { GallerySource(context) }
-    private val memory by lazy { GalleryMemory(context, gallery) }
-    private val scan = lazy { ScanWorker(context, gallery, memory) }
-    private val worker get() = scan.value
+    private val runtimeDelegate = lazy { GalleryRuntime.get(context) }
+    private val galleryRuntime get() = runtimeDelegate.value
+    private val gallery get() = galleryRuntime.gallery
+    private val memory get() = galleryRuntime.memory
+    private val worker get() = galleryRuntime.worker
     private val voiceEngine = lazy { VoiceRecall(context) }
     private val personal by lazy { PersonalMemory(context, memory) }
     private val productVision by lazy { ProductVision(context) }
-    private val modelInference = Mutex()
+    private val recallPlaces by lazy { RecallPlaces(context) }
+    private val visualSearchDispatcher = Dispatchers.IO.limitedParallelism(1)
+    private val modelInference get() = galleryRuntime.modelInference
     private val followUps by lazy { NextStepNotifications(context) }
+    private val licenseStorage by lazy { LicenseStorage(context) }
     private val picker = PickMultipleVisualMedia()
     private val referencePicker = PickVisualMedia()
     @Volatile private var referenceUri: Uri? = null
     private var pickerPromise: Promise? = null
-    @Volatile private var deletionPending = false
+    private val deletionOwner = Any()
+    private val deletionPending get() = galleryRuntime.deletionPending
     private var deletion: Pair<Promise, List<ArchivedPhoto>>? = null
 
     override fun definition() = ModuleDefinition {
         Name("NimbyGallery")
+
+        AsyncFunction("readLicense") Coroutine { ->
+            withContext(Dispatchers.IO) { licenseStorage.read() }
+        }
+        AsyncFunction("writeLicense") Coroutine { record: String? ->
+            withContext(Dispatchers.IO) { licenseStorage.write(record) }
+        }
 
         Function("access") { -> gallery.access().also { gallery.permissionStatus(false) } }
         Function("permissionStatus") { requested: Boolean -> gallery.permissionStatus(requested) }
@@ -127,15 +139,19 @@ class GalleryModule : Module() {
                         request.first.resolve(mapOf("approved" to approved, "removed" to removed, "requested" to request.second.size))
                     } catch (error: Exception) {
                         request.first.reject("DELETE_UNVERIFIED", "Nimby could not verify the deletion result.", error)
-                    } finally { deletionPending = false }
-                } else deletionPending = false
+                    } finally { finishDeletionReview() }
+                } else finishDeletionReview()
             }
         }
 
-        Function("startScan") { albums: List<String>, uris: List<String> ->
-            check(!deletionPending) { "Finish Android’s deletion review before scanning." }
-            check(modelInference.tryLock()) { "Wait for the current suggestion before scanning." }
-            try { worker.start(albums, uris) } finally { modelInference.unlock() }
+        AsyncFunction("startScan") Coroutine { albums: List<String>, uris: List<String> ->
+            withContext(Dispatchers.IO) {
+                check(modelInference.tryLock()) { "Wait for the current suggestion before scanning." }
+                try {
+                    check(!deletionPending) { "Finish Android’s deletion review before scanning." }
+                    worker.startManual(albums, uris)
+                } finally { modelInference.unlock() }
+            }
         }
         Function("scanStatus") { -> worker.status() }
         Function("controlScan") { action: String -> worker.control(action) }
@@ -157,6 +173,11 @@ class GalleryModule : Module() {
         OnActivityEntersForeground {
             worker.requestMemoryBackfill()
             appContext.backgroundCoroutineScope.launch(Dispatchers.IO) { runCatching { followUps.recover(memory) } }
+            if (galleryRuntime.autoScan.enabled()) appContext.backgroundCoroutineScope.launch(Dispatchers.IO) {
+                try { galleryRuntime.autoScan.recoverSchedule() }
+                catch (error: kotlinx.coroutines.CancellationException) { throw error }
+                catch (error: Exception) { android.util.Log.w("NimbyAutoScan", "Could not recover Auto-scan schedule", error) }
+            }
         }
         OnCreate {
             appContext.backgroundCoroutineScope.launch(Dispatchers.IO) {
@@ -238,13 +259,15 @@ class GalleryModule : Module() {
         }
 
         AsyncFunction("searchReferencePhoto") Coroutine { uri: String ->
-            withContext(Dispatchers.IO) {
-                check(modelInference.tryLock()) { "Wait for the current image to finish." }
-                try {
-                    val reference = checkedReference(uri)
-                    memory.similarToReference(reference, worker.referenceEmbedding(reference))
-                } finally { modelInference.unlock() }
+            searchReference(uri, VisualSearchScope())
+        }
+        AsyncFunction("searchReferencePhotoScoped") Coroutine { uri: String, options: VisualSearchOptions ->
+            val scope = withContext(Dispatchers.IO) {
+                val name = options.place?.trim()?.take(80)?.takeIf(String::isNotEmpty)
+                val area = name?.takeIf { worker.photoLocationsAvailable() }?.let { recallPlaces.find(it) }
+                VisualSearchScope(options.start, options.end, options.month?.takeIf { it in 1..12 }, name, area, mediaSource(options.source))
             }
+            searchReference(uri, scope)
         }
         AsyncFunction("describeReferenceScene") Coroutine { uri: String ->
             withContext(Dispatchers.IO) {
@@ -255,6 +278,26 @@ class GalleryModule : Module() {
                     }
                     productVision.describeScene(checkedReference(uri))
                 } finally { modelInference.unlock() }
+            }
+        }
+        AsyncFunction("readQwenTags") Coroutine { id: String ->
+            withContext(Dispatchers.IO) { memory.qwenTags(id.toLong()) }
+        }
+        AsyncFunction("suggestQwenTags") Coroutine { id: String, source: String? ->
+            withContext(Dispatchers.IO) {
+                check(modelInference.tryLock()) { "Wait for the current image to finish." }
+                try {
+                    check(!worker.busy()) { "Finish your gallery scan before using Qwen." }
+                    val uri = memory.available(id.toLong(), source) ?: error("This photo is no longer accessible.")
+                    productVision.suggestSearchTags(uri)
+                } finally { modelInference.unlock() }
+            }
+        }
+        AsyncFunction("saveQwenTags") Coroutine { id: String, source: String?, tags: List<String> ->
+            withContext(Dispatchers.IO) {
+                val imageId = id.toLong()
+                check(memory.available(imageId, source) != null) { "This photo is no longer accessible." }
+                memory.saveQwenTags(imageId, tags)
             }
         }
         AsyncFunction("searchablePlaces") Coroutine { ->
@@ -271,6 +314,26 @@ class GalleryModule : Module() {
             query: String, category: String?, start: Long?, end: Long?, place: String?, collection: String?, textOnly: Boolean, offset: Int ->
             withContext(Dispatchers.IO) {
                 memory.searchMemory(query.take(512), category, start, end, place, collection, textOnly, offset.coerceAtLeast(0))
+            }
+        }
+        AsyncFunction("searchRecall") Coroutine { options: RecallSearchOptions, offset: Int ->
+            withContext(visualSearchDispatcher) {
+                val explicit = options.place?.trim()?.take(80)?.takeIf(String::isNotEmpty)
+                val hint = options.placeHint?.takeIf { explicit == null && it.name.isNotBlank() }
+                val hintedPlace = hint?.let { recallPlaces.find(it.name) }
+                val location = hintedPlace ?: recallPlaces.find(explicit ?: options.terms)
+                val terms = when {
+                    explicit != null -> options.terms
+                    hintedPlace != null -> hint.terms
+                    location != null -> ""
+                    else -> options.terms
+                }
+                val gps = location != null && worker.photoLocationsAvailable()
+                memory.searchMemory(terms.take(512), options.category, options.start, options.end,
+                    explicit ?: location?.name, null, options.textOnly, offset.coerceAtLeast(0),
+                    month = options.month?.takeIf { it in 1..12 }, area = location?.takeIf { gps }, sourceType = mediaSource(options.source),
+                    visualContext = currentCoroutineContext()) +
+                    ("photoLocationsNeeded" to (location != null && !gps))
             }
         }
         AsyncFunction("setMemoryPlace") Coroutine { imageId: String, place: String? ->
@@ -290,6 +353,9 @@ class GalleryModule : Module() {
         }
         AsyncFunction("personalCandidates") Coroutine { start: Long, end: Long ->
             withContext(Dispatchers.IO) { personal.candidates(start, end, worker.photoLocationsAvailable()) }
+        }
+        AsyncFunction("timelineCandidates") Coroutine { start: Long, end: Long ->
+            withContext(visualSearchDispatcher) { personal.candidates(start, end, worker.photoLocationsAvailable(), currentCoroutineContext()) }
         }
         AsyncFunction("readPersonal") Coroutine { section: String ->
             withContext(Dispatchers.IO) { personal.read(section) }
@@ -313,6 +379,18 @@ class GalleryModule : Module() {
                 photoMapPage(memory, MapViewport(south, west, north, east), zoom, start, end, clusterId, offset).bridge()
             }
         }
+        AsyncFunction("scanMapClusters") Coroutine { scanId: String, zoom: Double ->
+            withContext(Dispatchers.IO) {
+                if (!worker.photoLocationsAvailable()) null
+                else photoMapClusters(memory, wholePhotoMap, zoom, null, null, scanId.toLong()).bridge()
+            }
+        }
+        AsyncFunction("scanMapPhotoPage") Coroutine { scanId: String, zoom: Double, clusterId: String, offset: Int ->
+            withContext(Dispatchers.IO) {
+                check(worker.photoLocationsAvailable()) { "Photo locations are unavailable." }
+                photoMapPage(memory, wholePhotoMap, zoom, null, null, clusterId, offset, scanId.toLong()).bridge()
+            }
+        }
 
         AsyncFunction("eyeStatus") Coroutine { ->
             withContext(Dispatchers.IO) { worker.eyeStatus() }
@@ -325,6 +403,15 @@ class GalleryModule : Module() {
         AsyncFunction("processing") Coroutine { ->
             withContext(Dispatchers.IO) { worker.processing() }
         }
+        AsyncFunction("autoScanStatus") Coroutine { ->
+            withContext(Dispatchers.IO) { galleryRuntime.autoScan.status() }
+        }
+        AsyncFunction("configureAutoScan") Coroutine { interval: String, chargingOnly: Boolean ->
+            withContext(Dispatchers.IO) {
+                try { galleryRuntime.autoScan.configure(interval, chargingOnly) }
+                finally { if (interval == "off") worker.yieldAutoScan() }
+            }
+        }
         AsyncFunction("resumeInterrupted") Coroutine { ->
             withContext(Dispatchers.IO) {
                 check(!deletionPending) { "Finish Android’s deletion review before scanning." }
@@ -333,10 +420,23 @@ class GalleryModule : Module() {
             }
         }
         AsyncFunction("excludeAlbum") Coroutine { id: String, name: String, excluded: Boolean ->
-            withContext(Dispatchers.IO) { memory.excludeAlbum(id, name, excluded) }
+            withContext(Dispatchers.IO) {
+                memory.excludeAlbum(id, name, excluded)
+                galleryRuntime.autoScan.invalidateCheckpoint()
+            }
         }
         AsyncFunction("clearAnalysis") Coroutine { all: Boolean ->
-            withContext(Dispatchers.IO) { worker.clearAnalysis(all) { personal.clear() } }
+            withContext(Dispatchers.IO) {
+                check(modelInference.tryLock()) { "Finish the current operation before clearing analysis." }
+                try {
+                    worker.yieldAutoScan()
+                    check(!worker.busy()) { "Finish the scan or model check first." }
+                    val schedule = galleryRuntime.autoScan
+                    if (schedule.enabled()) schedule.configure("off", schedule.chargingOnly())
+                    worker.clearAnalysis(all) { personal.clear() }
+                    schedule.invalidateCheckpoint(clearStatus = true)
+                } finally { modelInference.unlock() }
+            }
         }
 
         AsyncFunction("archivePage") Coroutine { offset: Int ->
@@ -362,10 +462,12 @@ class GalleryModule : Module() {
             withContext(Dispatchers.IO) { memory.restore(uris) }
         }
         AsyncFunction("deleteArchived") { uris: List<String>, promise: Promise ->
-            if (deletionPending || worker.busy() || Build.VERSION.SDK_INT < 30) {
+            val admitted = if (Build.VERSION.SDK_INT < 30 || !modelInference.tryLock()) false else try {
+                !worker.busy() && galleryRuntime.deletionReview.compareAndSet(null, deletionOwner)
+            } finally { modelInference.unlock() }
+            if (!admitted) {
                 promise.reject("DELETE_UNAVAILABLE", "Finish the current operation first. Deletion requires Android 11 or newer.", null)
             } else {
-                deletionPending = true
                 appContext.backgroundCoroutineScope.launch {
                     try {
                         val items = memory.deletionCandidates(uris)
@@ -376,7 +478,7 @@ class GalleryModule : Module() {
                             activity.startIntentSenderForResult(request.intentSender, DELETE_REQUEST, null, 0, 0, 0)
                         }
                     } catch (error: Exception) {
-                        withContext(Dispatchers.Main) { deletion = null; deletionPending = false }
+                        withContext(Dispatchers.Main) { deletion = null; finishDeletionReview() }
                         promise.reject("DELETE_UNAVAILABLE", error.message ?: "Android could not open deletion review.", error)
                     }
                 }
@@ -394,6 +496,9 @@ class GalleryModule : Module() {
         AsyncFunction("revisitPicks") Coroutine { seen: List<String> ->
             withContext(Dispatchers.IO) { memory.revisitPicks(seen) }
         }
+        AsyncFunction("dailyDiscoveries") Coroutine { ->
+            withContext(Dispatchers.IO) { memory.dailyDiscoveries() }
+        }
 
         AsyncFunction("scanFeed") Coroutine { scanId: String, category: String?, offset: Int, limit: Int ->
             withContext(Dispatchers.IO) { memory.scanFeed(scanId.toLong(), category, offset.coerceAtLeast(0), limit.coerceIn(1, 48)) }
@@ -408,7 +513,7 @@ class GalleryModule : Module() {
         }
 
         AsyncFunction("similar") Coroutine { id: String ->
-            withContext(Dispatchers.IO) { memory.similar(id.toLong()) }
+            withContext(visualSearchDispatcher) { memory.similar(id.toLong(), currentCoroutineContext()) }
         }
 
         AsyncFunction("openOriginal") Coroutine { id: String, source: String? ->
@@ -430,13 +535,32 @@ class GalleryModule : Module() {
 
         OnDestroy {
             if (voiceEngine.isInitialized()) voiceEngine.value.destroy()
-            if (scan.isInitialized()) worker.destroy()
             pickerPromise?.reject("PICKER_CLOSED", "The photo picker closed.", null)
             pickerPromise = null
             deletion?.first?.reject("DELETE_UNVERIFIED", "Nimby did not receive the deletion result.", null)
+            if (runtimeDelegate.isInitialized()) finishDeletionReview()
             deletion = null
         }
     }
+
+    private fun finishDeletionReview() {
+        galleryRuntime.deletionReview.compareAndSet(deletionOwner, null)
+    }
+
+    private suspend fun searchReference(uri: String, scope: VisualSearchScope): List<Map<String, Any?>> {
+        val (reference, embedding) = withContext(Dispatchers.IO) {
+            check(modelInference.tryLock()) { "Wait for the current image to finish." }
+            try {
+                val reference = checkedReference(uri)
+                reference to worker.referenceEmbedding(reference)
+            } finally { modelInference.unlock() }
+        }
+        return withContext(visualSearchDispatcher) {
+            memory.similarToReference(reference, embedding, scope, currentCoroutineContext())
+        }
+    }
+
+    private fun mediaSource(source: String?): String? = source?.takeIf { it == "gallery" || it == "picker" }
 
     private fun checkedReference(uri: String): Uri = checkNotNull(
         referenceUri?.takeIf { it.toString() == uri && gallery.readable(it) }

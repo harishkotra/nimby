@@ -20,3 +20,9 @@ internal fun recallMatch(query: String): RecallMatch? {
     // Quoted tokenizer output contains no FTS syntax. A space between terms is implicit AND.
     return RecallMatch(terms.joinToString(" ") { "\"$it\"" }, terms.joinToString(" "), terms)
 }
+
+internal fun RecallMatch.matchesVisualTag(tag: String): Boolean {
+    val normalized = Normalizer.normalize(tag, Normalizer.Form.NFKC).lowercase(Locale.ROOT)
+    val words = recallTerms.findAll(normalized).map { it.value }.filterNot { it in recallFillers }.toList()
+    return words.windowed(terms.size).any { it == terms }
+}

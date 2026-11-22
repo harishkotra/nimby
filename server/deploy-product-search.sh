@@ -16,7 +16,13 @@ if ! command -v sam >/dev/null || ! command -v node >/dev/null; then
   exit 1
 fi
 
-if ! secret_arn=$(aws_cli secretsmanager describe-secret --secret-id "$secret" --query ARN --output text); then
+secret_error=$(mktemp)
+trap 'rm -f -- "$secret_error"' EXIT
+if ! secret_arn=$(aws_cli secretsmanager describe-secret --secret-id "$secret" --query ARN --output text 2>"$secret_error"); then
+  if [[ $(<"$secret_error") != *ResourceNotFoundException* ]]; then
+    cat "$secret_error" >&2
+    exit 1
+  fi
   secret_arn=$(node --env-file-if-exists="$server_dir/../.env" --input-type=module -e '
     const key = process.env.TAVILY_API_KEY?.trim();
     if (!key) throw new Error("Set TAVILY_API_KEY in Nimby’s local .env first.");
@@ -24,10 +30,10 @@ if ! secret_arn=$(aws_cli secretsmanager describe-secret --secret-id "$secret" -
   ' | aws_cli secretsmanager create-secret --name "$secret" --secret-string file:///dev/stdin --query ARN --output text)
 fi
 
-sam validate --lint --template-file "$server_dir/product-search.aws.yaml" --region "$region"
+sam validate --lint --template-file "$server_dir/product-search.aws.yaml" --region "$region" >&2
 sam deploy --template-file "$server_dir/product-search.aws.yaml" --stack-name "$stack" --region "$region" \
   --resolve-s3 --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
-  --parameter-overrides "TavilySecretArn=$secret_arn" "DailySearchLimit=${NIMBY_DAILY_SEARCH_LIMIT:-60}"
+  --parameter-overrides "TavilySecretArn=$secret_arn" "DailySearchLimit=${NIMBY_DAILY_SEARCH_LIMIT:-60}" >&2
 
 aws_cli cloudformation describe-stacks --stack-name "$stack" \
   --query 'Stacks[0].Outputs[?OutputKey==`ProductSearchUrl`].OutputValue | [0]' --output text

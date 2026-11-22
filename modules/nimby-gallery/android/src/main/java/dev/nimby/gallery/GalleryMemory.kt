@@ -1,18 +1,20 @@
 package dev.nimby.gallery
 
+import android.app.ActivityManager
 import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
 import android.os.Build
+import android.util.Log
 import kotlinx.coroutines.ensureActive
 import org.json.JSONArray
 import org.json.JSONObject
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.util.PriorityQueue
-import kotlin.math.sqrt
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Locale
+import kotlin.coroutines.CoroutineContext
 
 internal data class Analysis(
     val json: String, val kind: String?, val confidence: Double?, val tags: JSONArray,
@@ -25,8 +27,13 @@ internal fun lowQuality(tags: JSONObject?): Boolean =
     listOf("unusable", "technical_flaw", "blurry").any { (tags?.optDouble(it) ?: 0.0) >= 0.9 }
 internal data class ArchivedPhoto(val uri: String, val name: String, val album: String,
     val bytes: Long, val version: String, val archived: Long, val eligible: Long)
+internal data class VisualSearchScope(val start: Long? = null, val end: Long? = null, val month: Int? = null,
+    val place: String? = null, val area: RecallPlace? = null, val source: String? = null, val scenePhotos: Boolean = false)
 internal class GalleryMemory(context: Context, private val gallery: GallerySource) :
-    SQLiteOpenHelper(context, "nimby-gallery.db", null, 8) {
+    SQLiteOpenHelper(context, "nimby-gallery.db", null, 11) {
+
+    private val visualCacheSlots = if (context.getSystemService(ActivityManager::class.java)?.isLowRamDevice == true) 1024 else 4096
+    private var visualCache: VisualEmbeddingCache? = null
 
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
@@ -60,6 +67,8 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         createScanResults(db)
         createMemorySchema(db)
         createFollowUpSchema(db)
+        createVisualSearchIndex(db)
+        addDailyDiscoveries(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -90,6 +99,45 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         if (oldVersion < 6) createScanResults(db)
         if (oldVersion < 7) createMemorySchema(db)
         if (oldVersion < 8) createFollowUpSchema(db)
+        if (oldVersion in 7..8) addQwenSearchTags(db)
+        if (oldVersion < 10) {
+            normalizeStoredEmbeddings(db)
+            createVisualSearchIndex(db)
+        }
+        if (oldVersion < 11) addDailyDiscoveries(db)
+    }
+
+    private fun addDailyDiscoveries(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE images ADD COLUMN decided_at INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("""CREATE TABLE daily_discoveries (
+            day TEXT NOT NULL, position INTEGER NOT NULL,
+            image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE, reason TEXT NOT NULL,
+            PRIMARY KEY (day, position), UNIQUE (day, image_id)
+        )""")
+    }
+
+    private fun createVisualSearchIndex(db: SQLiteDatabase) {
+        db.execSQL("""CREATE INDEX image_visual_candidates ON images(engine, id)
+            WHERE status = 'complete' AND embedding IS NOT NULL AND decision != 'dismissed'""")
+    }
+
+    private fun normalizeStoredEmbeddings(db: SQLiteDatabase) {
+        val raw = FloatArray(EYE_EMBEDDING_DIMENSIONS)
+        var after = 0L
+        while (true) {
+            val rows = db.rawQuery("SELECT id, embedding FROM images WHERE id > ? AND embedding IS NOT NULL ORDER BY id LIMIT 64",
+                arrayOf(after.toString())).use { row ->
+                buildList { while (row.moveToNext()) add(row.getLong(0) to row.getBlob(1)) }
+            }
+            if (rows.isEmpty()) return
+            for ((id, bytes) in rows) {
+                val unit = if (decodeEmbedding(bytes, raw)) unitEmbedding(raw) else null
+                db.update("images", ContentValues().apply {
+                    if (unit == null) putNull("embedding") else put("embedding", encodeEmbedding(unit))
+                }, "id = ?", arrayOf(id.toString()))
+            }
+            after = rows.last().first
+        }
     }
 
     private fun createFollowUpSchema(db: SQLiteDatabase) {
@@ -229,11 +277,13 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         return groupDuplicatePhotos(photos, matches)
     }
 
-    suspend fun refreshDuplicateLinks() {
-        while (true) {
+    suspend fun refreshDuplicateLinks(limit: Int = Int.MAX_VALUE) {
+        var remaining = limit
+        while (remaining > 0) {
             kotlinx.coroutines.currentCoroutineContext().ensureActive()
             val ids = readableDatabase.rawQuery("""SELECT id FROM images
-                WHERE linked=0 AND status='complete' AND embedding IS NOT NULL ORDER BY id LIMIT 32""", null).use { row ->
+                WHERE linked=0 AND status='complete' AND embedding IS NOT NULL ORDER BY id LIMIT ?""",
+                arrayOf(minOf(32, remaining).toString())).use { row ->
                 buildList { while (row.moveToNext()) add(row.getLong(0)) }
             }
             if (ids.isEmpty()) return
@@ -241,6 +291,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                 kotlinx.coroutines.currentCoroutineContext().ensureActive()
                 linkImage(id)
             }
+            remaining -= ids.size
         }
     }
 
@@ -252,17 +303,24 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             FROM images WHERE id=? AND linked=0 AND status='complete' AND embedding IS NOT NULL""",
             arrayOf(id.toString())).use { row ->
             if (!row.moveToFirst()) return
-            LinkInput(vector(row.getBlob(0)), row.getString(1), row.getString(2), row.getLong(3))
+            val vector = FloatArray(EYE_EMBEDDING_DIMENSIONS)
+            if (!decodeEmbedding(row.getBlob(0), vector)) {
+                db.execSQL("UPDATE images SET linked = 1 WHERE id = ?", arrayOf<Any>(id))
+                return
+            }
+            LinkInput(vector, row.getString(1), row.getString(2), row.getLong(3))
         }
         val rule = runCatching { JSONObject(original.result).optJSONObject("duplicates") }.getOrNull()
         val seconds = rule?.optDouble("window_seconds")?.takeIf { it in 1.0..120.0 } ?: 30.0
         val threshold = rule?.optDouble("similarity")?.takeIf { it in 0.0..1.0 } ?: 0.97
         val window = (seconds * 1_000).toLong()
         val matches = mutableMapOf<Long, Double>()
+        val candidate = FloatArray(EYE_EMBEDDING_DIMENSIONS)
         fun compare(query: String, args: Array<String>, cutoff: Double) {
             db.rawQuery(query, args).use { row ->
                 while (row.moveToNext()) {
-                    val score = cosine(original.vector, vector(row.getBlob(1)))
+                    if (!decodeEmbedding(row.getBlob(1), candidate)) continue
+                    val score = embeddingScore(original.vector, candidate)
                     if (score >= cutoff) matches.merge(row.getLong(0), score, ::maxOf)
                 }
             }
@@ -302,6 +360,16 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             arrayOf(EYE_VERSION, *versions.keys.toTypedArray())).use { row ->
             buildSet { while (row.moveToNext()) if (versions[row.getString(0)] == row.getString(1)) add(row.getString(0)) }
         }
+    }
+
+    fun pendingAutoScanPhotos(photos: List<Photo>): List<Photo> {
+        if (photos.isEmpty()) return emptyList()
+        val cached = cachedPhotos(photos)
+        val uris = photos.map { it.uri.toString() }
+        val slots = uris.joinToString(",") { "?" }
+        val archived = readableDatabase.rawQuery("SELECT uri FROM archive WHERE uri IN ($slots)", uris.toTypedArray())
+            .use { row -> buildSet { while (row.moveToNext()) add(row.getString(0)) } }
+        return photos.filter { it.uri.toString() !in cached && it.uri.toString() !in archived }
     }
 
     fun overview(currentId: Long?): Map<String, Any?> {
@@ -442,18 +510,22 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         db.execSQL("CREATE TABLE excluded_albums (bucket TEXT PRIMARY KEY, name TEXT NOT NULL)")
     }
 
-    fun beginScan(buckets: List<String>, uris: List<String>): Long {
+    fun beginScan(buckets: List<String>, uris: List<String>, automatic: Boolean = false): Long {
         val db = writableDatabase
         db.execSQL("UPDATE scans SET phase = 'interrupted' WHERE phase = 'running'")
         return db.insertOrThrow("scans", null, ContentValues().apply {
             put("started", System.currentTimeMillis())
             put("phase", "running")
-            put("scope", JSONObject().put("albums", JSONArray(buckets)).put("uris", JSONArray(uris)).toString())
+            if (!automatic) put("scope", JSONObject().put("albums", JSONArray(buckets)).put("uris", JSONArray(uris)).toString())
         })
     }
 
+    fun hasCompletedScan(): Boolean = readableDatabase.rawQuery(
+        "SELECT 1 FROM scans WHERE phase = 'complete' AND (analyzed > 0 OR cached > 0) LIMIT 1", null
+    ).use { it.moveToFirst() }
+
     fun interruptedScope(): Pair<List<String>, List<String>>? = readableDatabase.rawQuery("""
-        SELECT scope, phase FROM scans ORDER BY id DESC LIMIT 1
+        SELECT scope, phase FROM scans WHERE scope IS NOT NULL ORDER BY id DESC LIMIT 1
     """.trimIndent(), null).use { row ->
         if (!row.moveToFirst() || row.isNull(0) || row.getString(1) !in setOf("running", "interrupted")) return@use null
         val scope = JSONObject(row.getString(0))
@@ -485,7 +557,8 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
     }
 
     fun scanHistory(currentId: Long?): List<Map<String, Any?>> = readableDatabase.rawQuery(
-        """SELECT id, started, finished, phase, total, analyzed, cached, failed, scope IS NOT NULL,
+        """SELECT id, started, finished, phase, total, analyzed, cached, failed,
+            id = (SELECT MAX(id) FROM scans WHERE scope IS NOT NULL),
             EXISTS (SELECT 1 FROM scan_results WHERE scan_id = scans.id)
             FROM scans ORDER BY id DESC LIMIT 20""", null
     ).use { row ->
@@ -528,10 +601,12 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         else db.delete("excluded_albums", "bucket = ?", arrayOf(bucket))
     }
 
+    @Synchronized
     fun clearAnalysis(all: Boolean) {
         val db = writableDatabase
         db.beginTransaction()
         try {
+            db.delete("daily_discoveries", null, null)
             if (all) {
                 db.delete("sources", null, null)
                 db.delete("images", null, null)
@@ -541,10 +616,11 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                 db.execSQL("""UPDATE images SET status='pending', error=NULL, engine=NULL, result=NULL,
                     kind=NULL, confidence=NULL, tags=NULL, category=NULL, embedding=NULL, analyzed=0,
                     low_quality=0, keeper=NULL, aesthetic=NULL, linked=0""")
-                db.execSQL("UPDATE memory_details SET ocr_text = NULL WHERE ocr_text IS NOT NULL")
+                db.execSQL("UPDATE memory_details SET ocr_text = NULL, qwen_tags = NULL WHERE ocr_text IS NOT NULL OR qwen_tags IS NOT NULL")
             }
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        visualCache = null
     }
 
     // A picker URI has no reliable change token. Hash it again when explicitly selected.
@@ -610,11 +686,11 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         writableDatabase.update("sources", ContentValues().apply { putNull("error") }, "uri = ?", arrayOf(uri.toString()))
     }
 
+    @Synchronized
     fun complete(id: Long, analysis: Analysis) {
         val json = JSONObject(analysis.json)
         val scores = json.optJSONObject("scores")
-        val bytes = ByteBuffer.allocate(analysis.embedding.size * Float.SIZE_BYTES).order(ByteOrder.LITTLE_ENDIAN)
-        analysis.embedding.forEach { bytes.putFloat(it) }
+        val unit = unitEmbedding(analysis.embedding)
         writableDatabase.update("images", ContentValues().apply {
             put("status", "complete")
             putNull("error")
@@ -627,9 +703,10 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             put("low_quality", if (lowQuality(json.optJSONObject("tags"))) 1 else 0)
             put("keeper", scores?.optDouble("keeper")?.takeIf { it in 0.0..1.0 })
             put("aesthetic", scores?.optDouble("aesthetic")?.takeIf { it in 0.0..1.0 })
-            if (analysis.embedding.isNotEmpty()) put("embedding", bytes.array()) else putNull("embedding")
+            if (unit != null) put("embedding", encodeEmbedding(unit)) else putNull("embedding")
             put("analyzed", System.currentTimeMillis())
         }, "id = ?", arrayOf(id.toString()))
+        if (unit != null) visualCache?.replace(id, unit)
     }
 
     fun decide(id: Long, decision: String, collection: String?) {
@@ -638,6 +715,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         writableDatabase.update("images", ContentValues().apply {
             put("decision", decision)
             put("collection", if (decision == "kept") name else null)
+            put("decided_at", if (decision == "new") 0L else System.currentTimeMillis())
         }, "id = ?", arrayOf(id.toString()))
     }
 
@@ -672,7 +750,8 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
     }
 
     fun searchMemory(query: String, category: String?, start: Long?, end: Long?, place: String?, collection: String?,
-                     textOnly: Boolean, offset: Int): Map<String, Any?> {
+                     textOnly: Boolean, offset: Int, month: Int? = null, area: RecallPlace? = null, sourceType: String? = null,
+                     visualContext: CoroutineContext? = null): Map<String, Any?> {
         val match = recallMatch(query)
         if (query.isNotBlank() && match == null) return mapOf("items" to emptyList<Any>(), "next" to null)
         val filters = mutableListOf("images.status = 'complete'", "images.decision != 'dismissed'", visible)
@@ -685,33 +764,36 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
             filters.add("$reviewCategory = ? COLLATE NOCASE")
             args.add(category)
         }
-        if (place != null) {
-            filters.add("details.place = ? COLLATE NOCASE")
-            args.add(place)
-        }
         if (collection != null) {
             filters.add("images.collection = ? COLLATE NOCASE")
             args.add(collection)
         }
         if (textOnly) filters.add("length(details.ocr_text) > 0")
-        if (start != null || end != null) {
-            val dateFilter = capturedFilter("dated", start, end)
-            filters.add("""EXISTS (SELECT 1 FROM sources dated WHERE dated.image_id = images.id ${dateFilter.first}
-                AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = dated.uri))""")
-            args.addAll(dateFilter.second)
+        val sourceFilter = recallSourceFilter(start, end, month, place, area, sourceType)
+        if (sourceFilter.first.isNotEmpty()) {
+            filters.add("""EXISTS (SELECT 1 FROM sources WHERE sources.image_id = images.id ${sourceFilter.first}
+                AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = sources.uri))""")
+            args.addAll(sourceFilter.second)
         }
         val sort = if (match != null) {
-            args.addAll(listOf(match.phrase, match.phrase))
-            """CASE WHEN instr(lower(details.ocr_text), ?) > 0 THEN 0
-                WHEN instr(lower(memory_search.labels), ?) > 0 THEN 1 ELSE 2 END,"""
+            repeat(5) { args.add(match.phrase) }
+            """CASE WHEN instr(lower(replace(replace(replace(details.ocr_text, char(13), ''), char(10), ' '), char(9), ' ')), ?) > 0 THEN 0
+                WHEN instr(lower(details.qwen_tags), ?) > 0 THEN 1
+                WHEN instr(lower(memory_search.labels), ?) > 0 THEN 2
+                WHEN instr(lower(details.place), ?) > 0 OR instr(lower(images.collection), ?) > 0 THEN 3
+                ELSE 4 END,"""
         } else ""
         val from = if (match == null) "FROM images" else "FROM memory_search JOIN images ON images.id = memory_search.docid"
         val safeOffset = offset.coerceAtLeast(0)
         val items = mutableListOf<Map<String, Any?>>()
+        val allowVisual = visualContext != null && match != null && safeOffset == 0 && category == null && collection == null && !textOnly
+        var visualSeed: Pair<Long, String>? = null
+        val directIds = mutableSetOf<Long>()
+        var matchedPhotoText = false
         var next: Int? = null
         readableDatabase.rawQuery("""SELECT images.id, images.kind, images.confidence, images.tags,
                 $reviewCategory, images.decision, images.collection, details.ocr_text, details.place,
-                images.aesthetic, images.keeper
+                images.aesthetic, images.keeper, details.qwen_tags
             $from LEFT JOIN memory_details details ON details.image_id = images.id
             WHERE ${filters.joinToString(" AND ")}
             ORDER BY $sort images.analyzed DESC, images.id DESC LIMIT 257 OFFSET $safeOffset""",
@@ -724,10 +806,27 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                 }
                 visited++
                 val id = row.getLong(0)
-                val source = memorySource(id, start, end) ?: continue
+                val source = memorySource(id, sourceFilter) ?: continue
                 val tags = row.getString(3) ?: "[]"
+                val qwenTags = if (match != null) readQwenTags(row.getString(11)) else emptyList()
+                val eyeTags = if (match != null) JSONArray(tags) else null
+                if (allowVisual) {
+                    directIds.add(id)
+                    if (visualSeed == null && row.getString(4) == "Photos") {
+                        val label = qwenTags.firstOrNull(match::matchesVisualTag) ?: eyeTags?.let { labels ->
+                            (0 until labels.length()).firstNotNullOfOrNull { index ->
+                                val tag = labels.getJSONObject(index)
+                                tag.getString("label").replace('_', ' ')
+                                    .takeIf { tag.optDouble("confidence") >= 0.75 && match.matchesVisualTag(it) }
+                            }
+                        }
+                        if (label != null) visualSeed = id to label
+                    }
+                }
                 val photo = entry(id, row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) }, tags,
                     row.getString(4), row.getString(5), row.getString(6), source.first)
+                val savedPlace = row.getString(8)
+                val location = if (area != null && !savedPlace.equals(place, ignoreCase = true)) "Near ${area.name}" else savedPlace
                 val evidence = buildList {
                     val text = row.getString(7)
                     if (match != null && !text.isNullOrBlank()) {
@@ -736,35 +835,61 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                             ?: match.terms.firstNotNullOfOrNull { term ->
                                 normalized.indexOf(term, ignoreCase = true).takeIf { it >= 0 }
                             }
-                        if (position != null) add("Photo text: " + normalized
-                            .substring((position - 22).coerceAtLeast(0), (position + 68).coerceAtMost(normalized.length)))
+                        if (position != null) {
+                            matchedPhotoText = true
+                            add("Photo text: " + normalized
+                                .substring((position - 22).coerceAtLeast(0), (position + 68).coerceAtMost(normalized.length)))
+                        }
                         else if (textOnly) add("Searchable text")
                     } else if (textOnly) add("Searchable text")
-                    if (match != null && tags != "[]") {
-                        val labels = JSONArray(tags)
-                        val matchedTag = (0 until labels.length()).map { index ->
-                            labels.getJSONObject(index).getString("label").replace('_', ' ')
+                    if (match != null && eyeTags != null) {
+                        val matchedTag = (0 until eyeTags.length()).map { index ->
+                            eyeTags.getJSONObject(index).getString("label").replace('_', ' ')
                         }.firstOrNull { label -> match.terms.any { label.contains(it, ignoreCase = true) } }
                         if (matchedTag != null) add("Eye tag: $matchedTag")
                     }
+                    if (match != null) qwenTags.firstOrNull { tag ->
+                        match.terms.any { term -> tag.contains(term, ignoreCase = true) }
+                    }?.let { add("Qwen tag: $it") }
+                    if (area != null || place != null) location?.let { add("Place: $it") }
                     if (row.getString(4) != "Other") add("Eye category: ${row.getString(4)}")
-                    row.getString(8)?.let { add("Place: $it") }
+                    if (area == null && place == null) savedPlace?.let { add("Place: $it") }
                     row.getString(6)?.let { add("Collection: $it") }
                 }.take(3)
                 items.add(mapOf("photo" to photo + ("sourceKey" to source.first.first.toString()),
-                    "captured" to source.second, "place" to row.getString(8), "evidence" to evidence,
+                    "captured" to source.second, "place" to location, "evidence" to evidence,
                     "aesthetic" to row.getDouble(9).takeUnless { row.isNull(9) },
                     "keeper" to row.getDouble(10).takeUnless { row.isNull(10) }))
             }
         }
+        val seed = visualSeed
+        if (visualContext != null && seed != null && next == null && items.size <= 8 && !matchedPhotoText) {
+            val scope = VisualSearchScope(start, end, month, place, area, sourceType, scenePhotos = true)
+            items.addAll(relatedRecallResults(seed.first, seed.second, scope, directIds, visualContext))
+        }
         return mapOf("items" to items, "next" to next)
     }
 
-    private fun memorySource(id: Long, start: Long? = null, end: Long? = null): Pair<Triple<Uri, String, String>, Long?>? {
-        val dates = capturedFilter("sources", start, end)
+    @Synchronized
+    private fun relatedRecallResults(seed: Long, label: String, scope: VisualSearchScope, directIds: Set<Long>,
+                                     cancellation: CoroutineContext): List<Map<String, Any?>> {
+        val reference = FloatArray(EYE_EMBEDDING_DIMENSIONS)
+        val engine = readableDatabase.rawQuery("""SELECT engine, embedding FROM images
+            WHERE id = ? AND status = 'complete' AND embedding IS NOT NULL AND decision != 'dismissed' AND $visible""",
+            arrayOf(seed.toString())).use { row ->
+            if (row.moveToFirst() && decodeEmbedding(row.getBlob(1), reference)) row.getString(0) else null
+        } ?: return emptyList()
+        return similarTo(reference, engine, seed, null, scope, cancellation, exclude = directIds, minimum = 0.84)
+            .take(4).map { photo ->
+                mapOf("photo" to photo, "captured" to photo["captured"], "place" to (scope.place ?: scope.area?.name),
+                    "evidence" to listOf("Visually similar to a match tagged “$label”"), "matchKind" to "visual")
+            }
+    }
+
+    private fun memorySource(id: Long, scope: Pair<String, Array<String>> = "" to emptyArray()): Pair<Triple<Uri, String, String>, Long?>? {
         return readableDatabase.rawQuery("""SELECT uri, name, album, captured FROM sources
-            WHERE image_id = ? ${dates.first} AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = sources.uri)
-            ORDER BY source, captured DESC, uri""", arrayOf(id.toString(), *dates.second)).use { row ->
+            WHERE image_id = ? ${scope.first} AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = sources.uri)
+            ORDER BY source, captured DESC, uri""", arrayOf(id.toString(), *scope.second)).use { row ->
             while (row.moveToNext()) {
                 val uri = Uri.parse(row.getString(0))
                 if (gallery.readable(uri)) return@use Triple(uri, row.getString(1), row.getString(2)) to
@@ -774,10 +899,29 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         }
     }
 
-    private fun capturedFilter(alias: String, start: Long?, end: Long?): Pair<String, Array<String>> {
+    private fun recallSourceFilter(start: Long?, end: Long?, month: Int?, place: String?, area: RecallPlace?,
+                                   sourceType: String?): Pair<String, Array<String>> {
+        val (dates, dateArgs) = capturedFilter("sources", start, end, month)
+        val source = if (sourceType == null) dates else "$dates AND sources.source = ?"
+        val sourceArgs = dateArgs + listOfNotNull(sourceType)
+        if (place == null) return source to sourceArgs
+        val saved = """EXISTS (SELECT 1 FROM memory_details named WHERE named.image_id = sources.image_id
+            AND named.place = ? COLLATE NOCASE)"""
+        if (area == null) return "$source AND $saved" to arrayOf(*sourceArgs, place)
+        val args = mutableListOf(*sourceArgs, place)
+        val bounds = area.bounds.joinToString(" OR ") { box ->
+            args.addAll(listOf(box.south, box.north, box.west, box.east).map(Double::toString))
+            val longitude = if (box.west <= box.east) "g.longitude BETWEEN ? AND ?" else "(g.longitude >= ? OR g.longitude <= ?)"
+            "(g.latitude BETWEEN ? AND ? AND $longitude)"
+        }
+        return """$source AND ($saved OR EXISTS (SELECT 1 FROM photo_locations g
+            WHERE g.uri = sources.uri AND g.version = sources.version AND ($bounds)))""" to args.toTypedArray()
+    }
+
+    private fun capturedFilter(alias: String, start: Long?, end: Long?, month: Int? = null): Pair<String, Array<String>> {
         val sql = StringBuilder()
         val args = mutableListOf<String>()
-        if (start != null || end != null) sql.append(" AND $alias.captured > 0")
+        if (start != null || end != null || month != null) sql.append(" AND $alias.captured > 0")
         if (start != null) {
             sql.append(" AND $alias.captured >= ?")
             args.add(start.toString())
@@ -785,6 +929,10 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         if (end != null) {
             sql.append(" AND $alias.captured < ?")
             args.add(end.toString())
+        }
+        if (month != null) {
+            sql.append(" AND strftime('%m', $alias.captured / 1000, 'unixepoch', 'localtime') = ?")
+            args.add(month.toString().padStart(2, '0'))
         }
         return sql.toString() to args.toTypedArray()
     }
@@ -798,6 +946,26 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
     fun memoryPlace(imageId: String): String? = readableDatabase.rawQuery(
         "SELECT place FROM memory_details WHERE image_id = ?", arrayOf(imageId)
     ).use { row -> if (row.moveToFirst()) row.getString(0) else null }
+
+    fun qwenTags(id: Long): List<String> = readableDatabase.rawQuery(
+        "SELECT qwen_tags FROM memory_details WHERE image_id = ?", arrayOf(id.toString())
+    ).use { if (it.moveToFirst()) readQwenTags(it.getString(0)) else emptyList() }
+
+    fun saveQwenTags(id: Long, tags: List<String>): List<String> {
+        val values = normalizedQwenTags(tags)
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            val args = arrayOf(id.toString())
+            db.execSQL("INSERT OR IGNORE INTO memory_details(image_id) SELECT id FROM images WHERE id = ? AND status = 'complete'", args)
+            val updated = db.update("memory_details", ContentValues().apply {
+                put("qwen_tags", JSONArray(values).toString().takeUnless { values.isEmpty() })
+            }, "image_id = ? AND EXISTS (SELECT 1 FROM images WHERE id = memory_details.image_id AND status = 'complete')", args)
+            check(updated == 1) { "This photo is no longer indexed." }
+            db.setTransactionSuccessful()
+            return values
+        } finally { db.endTransaction() }
+    }
 
     fun setMemoryPlace(imageId: String, place: String?) {
         val id = imageId.toLong()
@@ -904,6 +1072,12 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         while (row.moveToNext()) add(PendingOcr(row.getLong(0), row.getString(1)))
     } }
 
+    fun pendingOcrSource(photo: Photo): PendingOcr? = readableDatabase.rawQuery(
+        """SELECT images.id, images.fingerprint $pendingOcr AND images.id =
+            (SELECT image_id FROM sources WHERE uri = ? AND version = ?)""",
+        arrayOf(photo.uri.toString(), photo.version)
+    ).use { if (it.moveToFirst()) PendingOcr(it.getLong(0), it.getString(1)) else null }
+
     fun saveOcr(target: PendingOcr, text: String) {
         val db = writableDatabase
         db.beginTransaction()
@@ -949,17 +1123,20 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
     }
 
     fun forEachMapPhoto(south: Double, west: Double, north: Double, east: Double,
-                        start: Long?, end: Long?, visit: (MapPhoto) -> Boolean) {
+                        start: Long?, end: Long?, scanId: Long? = null, visit: (MapPhoto) -> Boolean) {
         require(south in -90.0..90.0 && north in south..90.0 && west in -180.0..180.0 && east in -180.0..180.0)
         val longitudes = if (west <= east) "g.longitude BETWEEN ? AND ?" else "(g.longitude >= ? OR g.longitude <= ?)"
         val dates = capturedFilter("s", start, end)
+        val scan = if (scanId == null) "" else "JOIN scan_results r ON r.uri = s.uri AND r.image_id = i.id AND r.scan_id = ?"
         readableDatabase.rawQuery("""SELECT i.id, s.uri, s.name, s.album, g.latitude, g.longitude, s.captured
             FROM photo_locations g JOIN sources s ON s.uri = g.uri AND s.version = g.version
             JOIN images i ON i.id = s.image_id
+            $scan
             WHERE g.latitude BETWEEN ? AND ? AND $longitudes AND i.status = 'complete' AND i.decision != 'dismissed'
             AND NOT EXISTS (SELECT 1 FROM archive a WHERE a.uri = s.uri) ${dates.first}
             ORDER BY s.captured DESC, s.uri""",
-            arrayOf(south.toString(), north.toString(), west.toString(), east.toString(), *dates.second)).use { row ->
+            (listOfNotNull(scanId?.toString(), south.toString(), north.toString(), west.toString(), east.toString()) + dates.second)
+                .toTypedArray()).use { row ->
             while (row.moveToNext()) {
                 val uri = row.getString(1)
                 if (!gallery.readable(Uri.parse(uri))) continue
@@ -1034,6 +1211,122 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         } }
     }
 
+    private val dailyVisible = """$visible AND NOT EXISTS (SELECT 1 FROM sources s JOIN archive a
+        ON a.uri = s.uri AND a.version = s.version WHERE s.image_id = images.id)""".trimIndent()
+
+    @Synchronized
+    fun dailyDiscoveries(): List<Map<String, Any?>> {
+        val calendar = Calendar.getInstance()
+        val format = SimpleDateFormat("yyyy-MM-dd", Locale.US)
+        val today = format.format(calendar.time)
+        val db = writableDatabase
+        val saved = db.rawQuery("SELECT 1 FROM daily_discoveries WHERE day = ? LIMIT 1", arrayOf(today)).use { it.moveToFirst() }
+        if (!saved) {
+            calendar.add(Calendar.DAY_OF_YEAR, -45)
+            val cutoff = format.format(calendar.time)
+            val picks = chooseDailyDiscoveries(db, today, cutoff)
+            db.beginTransaction()
+            try {
+                db.delete("daily_discoveries", "day < ?", arrayOf(cutoff))
+                picks.forEachIndexed { position, pick ->
+                    db.insertOrThrow("daily_discoveries", null, ContentValues().apply {
+                        put("day", today)
+                        put("position", position)
+                        put("image_id", pick.candidate.id)
+                        put("reason", pick.reason)
+                    })
+                }
+                db.setTransactionSuccessful()
+            } finally { db.endTransaction() }
+        }
+        return db.rawQuery("""SELECT images.id, images.kind, images.confidence, images.tags, $reviewCategory, d.reason
+            FROM daily_discoveries d JOIN images ON d.image_id = images.id
+            WHERE d.day = ? AND images.status = 'complete' AND images.decision = 'new' AND $dailyVisible
+            ORDER BY d.position""", arrayOf(today)).use { row -> buildList {
+            while (row.moveToNext()) {
+                val id = row.getLong(0)
+                val source = primarySource(id) ?: continue
+                add(entry(id, row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) }, row.getString(3) ?: "[]",
+                    row.getString(4), "new", null, source) + ("discoveryReason" to row.getString(5)))
+            }
+        } }
+    }
+
+    private fun chooseDailyDiscoveries(db: SQLiteDatabase, today: String, cutoff: String): List<DiscoveryRank> {
+        val eligible = """images.status = 'complete' AND images.decision = 'new' AND $dailyVisible
+            AND (images.category IS NOT NULL OR images.kind IN ('photo','selfie'))""".trimIndent()
+        val categories = db.rawQuery("""SELECT $reviewCategory FROM images
+            WHERE $eligible GROUP BY 1 ORDER BY MAX(images.analyzed) DESC LIMIT 20""", null
+        ).use { row -> buildList { while (row.moveToNext()) add(row.getString(0)) } }
+        if (categories.isEmpty()) return emptyList()
+        val candidates = categories.flatMap { category ->
+            db.rawQuery("""SELECT images.id, images.tags, details.qwen_tags, history.last_shown, images.low_quality, images.analyzed
+                FROM images LEFT JOIN memory_details details ON details.image_id = images.id
+                LEFT JOIN (SELECT image_id, MAX(day) AS last_shown FROM daily_discoveries
+                    WHERE day >= ? AND day < ? GROUP BY image_id) history ON history.image_id = images.id
+                WHERE $eligible AND $reviewCategory = ?
+                ORDER BY images.low_quality, history.last_shown, images.analyzed DESC, images.id DESC LIMIT 24""",
+                arrayOf(cutoff, today, category)).use { row -> buildList {
+                while (row.moveToNext()) add(DiscoveryCandidate(row.getLong(0),
+                    discoveryTraits(category, row.getString(1), row.getString(2)), row.getString(3),
+                    row.getInt(4) != 0, row.getLong(5)))
+            } }
+        }
+        val ranked = rankDiscoveries(candidates, discoveryFeedback(db))
+        val selected = mutableListOf<DiscoveryRank>()
+        val used = mutableSetOf<String>()
+        fun select(list: List<DiscoveryRank>, uniqueCategory: Boolean) {
+            for (pick in list) {
+                if (selected.size == 3) return
+                val category = pick.candidate.traits.category
+                if (uniqueCategory && category in used) continue
+                val id = pick.candidate.id
+                if (selected.any { id == it.candidate.id || hasNearMatch(db, id, it.candidate.id) }) continue
+                if (primarySource(id) == null) continue
+                selected.add(pick)
+                used.add(category)
+            }
+        }
+        select(ranked, uniqueCategory = true)
+        if (selected.size < 3) select(ranked.filter { it.candidate.traits.category == "Photos" }, uniqueCategory = false)
+        return selected
+    }
+
+    private fun discoveryFeedback(db: SQLiteDatabase): List<DiscoveryFeedback> = db.rawQuery("""
+        WITH archived_images AS (SELECT s.image_id, MAX(a.archived) AS stamped FROM archive a
+            JOIN sources s ON s.uri = a.uri AND s.version = a.version AND s.image_id IS NOT NULL GROUP BY s.image_id),
+        feedback AS (
+            SELECT images.id, $reviewCategory AS category, images.tags, details.qwen_tags, images.decision,
+                COALESCE(NULLIF(images.decided_at, 0), images.analyzed) AS stamped
+            FROM images LEFT JOIN memory_details details ON details.image_id = images.id
+            WHERE images.status = 'complete' AND images.decision IN ('kept','dismissed')
+                AND images.id NOT IN (SELECT image_id FROM archived_images)
+            UNION ALL
+            SELECT images.id, $reviewCategory, images.tags, details.qwen_tags, 'archived', archived_images.stamped
+            FROM archived_images JOIN images ON images.id = archived_images.image_id
+            LEFT JOIN memory_details details ON details.image_id = images.id WHERE images.status = 'complete'
+        ) SELECT category, tags, qwen_tags, decision FROM feedback ORDER BY stamped DESC, id DESC LIMIT 160""", null
+    ).use { row -> buildList {
+        while (row.moveToNext()) add(DiscoveryFeedback(discoveryTraits(row.getString(0), row.getString(1), row.getString(2)), row.getString(3)))
+    } }
+
+    private fun discoveryTraits(category: String, eyeTags: String?, qwenTags: String?): DiscoveryTraits {
+        val tags = JSONArray(eyeTags ?: "[]")
+        val topics = (0 until tags.length()).mapNotNull { index ->
+            val tag = tags.getJSONObject(index)
+            tag.getString("label").replace('_', ' ').takeIf { tag.optDouble("confidence") >= 0.65 && it !in genericDiscoveryTags }
+        }
+        return DiscoveryTraits(category, (readQwenTags(qwenTags) + topics).distinct().take(6))
+    }
+
+    private val genericDiscoveryTags = setOf("photo", "selfie", "screenshot", "reference", "reference photo", "photo of screen",
+        "document", "unusable", "technical flaw", "blurry", "good", "high quality", "soft")
+
+    private fun hasNearMatch(db: SQLiteDatabase, first: Long, second: Long): Boolean = db.rawQuery(
+        "SELECT 1 FROM near_matches WHERE left_id = ? AND right_id = ?",
+        arrayOf(minOf(first, second).toString(), maxOf(first, second).toString())
+    ).use { it.moveToFirst() }
+
     fun revisitPicks(seen: List<String>): List<Map<String, Any?>> {
         val db = readableDatabase
         val excluded = seen.takeLast(96).distinct().toTypedArray()
@@ -1052,10 +1345,7 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
                 ORDER BY low_quality, analyzed DESC, id DESC LIMIT 24""", arrayOf(*excluded, category)).use { row ->
                 while (row.moveToNext()) {
                     val id = row.getLong(0)
-                    if (ids.any { picked -> db.rawQuery(
-                            "SELECT 1 FROM near_matches WHERE left_id = ? AND right_id = ?",
-                            arrayOf(minOf(id, picked).toString(), maxOf(id, picked).toString())
-                        ).use { it.moveToFirst() } }) continue
+                    if (ids.any { picked -> hasNearMatch(db, id, picked) }) continue
                     val photo = primarySource(id) ?: continue
                     picks.add(entry(id, row.getString(1), row.getDouble(2).takeUnless { row.isNull(2) },
                         row.getString(3), category, row.getString(5), row.getString(6), photo))
@@ -1101,66 +1391,100 @@ internal class GalleryMemory(context: Context, private val gallery: GallerySourc
         ).use { row -> buildList { while (row.moveToNext()) add(row.getString(0)) } }
     }
 
-    fun similar(id: Long): List<Map<String, Any?>> {
-        val db = readableDatabase
-        val original = db.rawQuery("SELECT engine, embedding, result FROM images WHERE id = ? AND embedding IS NOT NULL",
-            arrayOf(id.toString())).use {
-            if (it.moveToFirst()) Triple(it.getString(0), vector(it.getBlob(1)), it.getString(2)) else null
+    @Synchronized
+    fun similar(id: Long, cancellation: CoroutineContext): List<Map<String, Any?>> {
+        val original = readableDatabase.rawQuery(
+            "SELECT engine, embedding, result FROM images WHERE id = ? AND embedding IS NOT NULL",
+            arrayOf(id.toString())
+        ).use {
+            if (!it.moveToFirst()) return emptyList()
+            val reference = FloatArray(EYE_EMBEDDING_DIMENSIONS)
+            if (!decodeEmbedding(it.getBlob(1), reference)) return emptyList()
+            Triple(it.getString(0), reference, it.getString(2))
         }
-            ?: return emptyList()
         val duplicateThreshold = JSONObject(original.third).optJSONObject("duplicates")?.optDouble("similarity")
             ?.takeIf { it in 0.0..1.0 } ?: 0.97
-        return similarTo(original.second, original.first, id, duplicateThreshold)
+        return similarTo(original.second, original.first, id, duplicateThreshold, VisualSearchScope(), cancellation)
     }
 
-    fun similarToReference(uri: Uri, embedding: FloatArray): List<Map<String, Any?>> {
+    @Synchronized
+    fun similarToReference(uri: Uri, embedding: FloatArray, scope: VisualSearchScope, cancellation: CoroutineContext): List<Map<String, Any?>> {
+        val reference = unitEmbedding(embedding) ?: return emptyList()
         val indexedId = readableDatabase.rawQuery("SELECT image_id FROM sources WHERE uri = ?",
             arrayOf(uri.toString())).use { if (it.moveToFirst()) it.getLong(0) else null }
-        return similarTo(embedding, EYE_VERSION, indexedId, null)
+        return similarTo(reference, EYE_VERSION, indexedId, null, scope, cancellation)
     }
 
-    private fun similarTo(reference: FloatArray, engine: String, excludedId: Long?, duplicateThreshold: Double?): List<Map<String, Any?>> {
+    private fun similarTo(reference: FloatArray, engine: String, excludedId: Long?, duplicateThreshold: Double?,
+                          scope: VisualSearchScope, cancellation: CoroutineContext, exclude: Set<Long> = emptySet(),
+                          minimum: Double = 0.60): List<Map<String, Any?>> {
+        cancellation.ensureActive()
+        val started = System.nanoTime()
         val db = readableDatabase
-        data class Match(val id: Long, val score: Double)
-        val best = PriorityQueue<Match>(compareBy { it.score })
-        db.rawQuery(
-            "SELECT id, embedding FROM images WHERE id != ? AND engine = ? AND status = 'complete' AND embedding IS NOT NULL AND decision != 'dismissed' AND $visible",
-            arrayOf((excludedId ?: -1).toString(), engine)
-        ).use { row ->
-            while (row.moveToNext()) {
-                val score = cosine(reference, vector(row.getBlob(1)))
-                if (score < 0.60) continue
-                best.add(Match(row.getLong(0), score))
-                if (best.size > 24) best.poll()
+        val sourceFilter = recallSourceFilter(scope.start, scope.end, scope.month, scope.place, scope.area, scope.source)
+        val filter = """EXISTS (SELECT 1 FROM sources WHERE sources.image_id = images.id
+            ${sourceFilter.first} AND NOT EXISTS (SELECT 1 FROM archive WHERE archive.uri = sources.uri))"""
+        val sceneFilter = if (scope.scenePhotos) "AND images.kind = 'photo' AND images.category IS NULL" else ""
+        val cache = visualCache ?: VisualEmbeddingCache(visualCacheSlots).also { visualCache = it }
+        cache.startQuery()
+        val best = TopVisualMatches(24, minimum)
+        val scratch = FloatArray(EYE_EMBEDDING_DIMENSIONS)
+        var hits = 0
+        var candidates = 0
+        var after = 0L
+        while (true) {
+            cancellation.ensureActive()
+            val ids = db.rawQuery("""SELECT id FROM images WHERE id > ? AND id != ? AND engine = ?
+                AND status = 'complete' AND embedding IS NOT NULL AND decision != 'dismissed' AND $filter $sceneFilter
+                ORDER BY id LIMIT 128""",
+                arrayOf(after.toString(), (excludedId ?: -1).toString(), engine, *sourceFilter.second)
+            ).use { row -> buildList { while (row.moveToNext()) add(row.getLong(0)) } }
+            if (ids.isEmpty()) break
+            val misses = ids.filter { id ->
+                if (id in exclude) return@filter false
+                candidates++
+                val score = cache.score(id, reference) ?: return@filter true
+                hits++
+                best.offer(id, score)
+                false
             }
+            if (misses.isNotEmpty()) {
+                val slots = misses.joinToString(",") { "?" }
+                db.rawQuery("SELECT id, embedding FROM images WHERE id IN ($slots) ORDER BY id",
+                    misses.map(Long::toString).toTypedArray()).use { row ->
+                    while (row.moveToNext()) {
+                        val id = row.getLong(0)
+                        if (!decodeEmbedding(row.getBlob(1), scratch)) continue
+                        best.offer(id, embeddingScore(reference, scratch))
+                        cache.put(id, scratch)
+                    }
+                }
+            }
+            after = ids.last()
+            if (ids.size < 128) break
         }
-        return best.sortedByDescending { it.score }.mapNotNull { match ->
-            db.rawQuery("SELECT kind, confidence, tags, category, decision, collection FROM images WHERE id = ?",
+        val rankedAt = System.nanoTime()
+        val results = best.ranked().asSequence().mapNotNull { match ->
+            cancellation.ensureActive()
+            val (source, captured) = memorySource(match.id, sourceFilter) ?: return@mapNotNull null
+            db.rawQuery("""SELECT kind, confidence, tags, category, decision, collection FROM images
+                WHERE id = ? AND status = 'complete' AND decision != 'dismissed' $sceneFilter""",
                 arrayOf(match.id.toString())).use { row ->
                 if (!row.moveToFirst()) return@use null
                 val photo = entry(match.id, row.getString(0), row.getDouble(1).takeUnless { row.isNull(1) },
-                    row.getString(2), row.getString(3), row.getString(4), row.getString(5))
-                if (photo["uri"] == null) null
-                else photo + mapOf("similarity" to match.score, "nearDuplicate" to duplicateThreshold?.let { match.score >= it })
+                    row.getString(2), row.getString(3), row.getString(4), row.getString(5), source)
+                photo + mapOf("similarity" to match.score, "nearDuplicate" to duplicateThreshold?.let { match.score >= it },
+                    "captured" to captured, "sourceKey" to source.first.toString())
             }
-        }.take(8)
-    }
-
-    private fun vector(bytes: ByteArray): FloatArray {
-        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
-        return FloatArray(buffer.remaining()).also { buffer.get(it) }
-    }
-
-    private fun cosine(a: FloatArray, b: FloatArray): Double {
-        if (a.size != b.size) return 0.0
-        var dot = 0.0
-        var left = 0.0
-        var right = 0.0
-        for (i in a.indices) {
-            dot += a[i].toDouble() * b[i]
-            left += a[i].toDouble() * a[i]
-            right += b[i].toDouble() * b[i]
+        }.take(8).toList()
+        val state = when {
+            candidates == 0 -> "empty"
+            hits == 0 -> "cold"
+            hits == candidates -> "warm"
+            else -> "mixed"
         }
-        return if (left > 0 && right > 0) (dot / sqrt(left * right)).coerceIn(-1.0, 1.0) else 0.0
+        Log.d("NimbySearch", "visual cache=$state candidates=$candidates hits=$hits " +
+            "rankMs=${(rankedAt - started) / 1_000_000.0} totalMs=${(System.nanoTime() - started) / 1_000_000.0}")
+        return results
     }
 }

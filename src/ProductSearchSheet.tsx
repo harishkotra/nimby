@@ -4,20 +4,13 @@ import { ActionSheet } from './ActionSheet';
 import { native } from './gallery';
 import { ReadingStatus } from './ReadingStatus';
 import { googleShoppingUrl, productQuery, productQueryCandidates, visionProductQuery } from './nextStepFacts';
+import { fetchRetailerEndpoint, retailerOverride } from './retailerEndpoint';
 import { ActionLink, Body, Button, color, ErrorText, Heading, Icon, Segments, styles } from './ui';
 
 type Listing = { title: string; url: string; store: string };
 const readers = [{ value: 'ocr', label: 'OCR' }, { value: 'qwen', label: 'Qwen vision' }] as const;
 type Reader = typeof readers[number]['value'];
 type ReadState = 'reading' | 'no-title' | 'unavailable' | 'done';
-
-function configuredEndpoint() {
-  try {
-    const url = new URL(process.env.EXPO_PUBLIC_PRODUCT_SEARCH_URL ?? '');
-    if (url.username || url.password) return null;
-    return url.protocol === 'https:' || (__DEV__ && url.protocol === 'http:' && url.hostname === '127.0.0.1') ? url.href : null;
-  } catch { return null; }
-}
 
 function retailerListings(value: unknown): Listing[] {
   if (!Array.isArray(value)) return [];
@@ -51,8 +44,20 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
   const [error, setError] = useState('');
   const edited = useRef(false);
   const controller = useRef<AbortController | null>(null);
-  const endpoint = configuredEndpoint();
+  const [endpoint, setEndpoint] = useState<string | null | undefined>(() =>
+    retailerOverride(process.env.EXPO_PUBLIC_PRODUCT_SEARCH_URL, __DEV__) ?? undefined);
   const query = productQuery(text);
+
+  useEffect(() => {
+    if (endpoint !== undefined) return;
+    const config = new AbortController();
+    let active = true;
+    const timeout = setTimeout(() => { config.abort(); if (active) setEndpoint(null); }, 3_500);
+    void fetchRetailerEndpoint(config.signal).then((url) => {
+      if (active && !config.signal.aborted) setEndpoint(url);
+    }).finally(() => clearTimeout(timeout));
+    return () => { active = false; config.abort(); clearTimeout(timeout); };
+  }, [endpoint]);
 
   useEffect(() => {
     const read = native?.readShoppingText;
@@ -167,14 +172,14 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
   }
 
   function submit() {
-    if (!query || loading) return;
+    if (!query || loading || endpoint === undefined) return;
     if (endpoint) void search();
     else void open(googleShoppingUrl(query));
   }
 
   return <ActionSheet title="Find buying links" close={close}
-    footer={<Button label={loading ? 'Searching…' : endpoint ? 'Find retailer links' : 'Search Google Shopping'}
-      disabled={!query || loading} run={submit} />}>
+    footer={<Button label={loading ? 'Searching…' : endpoint === undefined ? 'Checking retailer search…' :
+      endpoint ? 'Find retailer links' : 'Search Google Shopping'} disabled={!query || loading || endpoint === undefined} run={submit} />}>
     <View style={styles.column}>
       {vision && <Segments options={readers} value={reader} select={chooseReader} />}
       {reader === 'qwen' && vision && <View style={layout.vision}>
@@ -206,7 +211,8 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
           'Couldn’t find a product name in this screenshot. You can enter it above.' :
           'Couldn’t read this screenshot. You can enter the product name above.'}
       </Text>}
-      <Body>{endpoint ? 'Check the name before searching. Tavily receives only the search text shown here.' :
+      <Body>{endpoint === undefined ? 'Check the product name or model number before searching.' :
+        endpoint ? 'Check the name before searching. Tavily receives only the search text shown here.' :
         'Check the name before opening Google Shopping in your browser.'}</Body>
       {!!error && <ErrorText>{error}</ErrorText>}
       {results && (results.listings.length ? <View style={layout.results}>
@@ -221,7 +227,7 @@ export function ProductSearchSheet({ imageId, screenshotText, close }: {
       </View> : <View style={layout.results}>
         <Heading>No matching listings</Heading><Body>Check the model number or try Google Shopping.</Body>
       </View>)}
-      {!!endpoint && <ActionLink label="Search Google Shopping" disabled={!query || loading} run={() => void open(googleShoppingUrl(query))} />}
+      {endpoint !== null && <ActionLink label="Search Google Shopping" disabled={!query || loading} run={() => void open(googleShoppingUrl(query))} />}
     </View>
   </ActionSheet>;
 }

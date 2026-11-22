@@ -1,8 +1,13 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { googleShoppingUrl, productQuery, productQueryCandidates, receiptSuggestion, visionProductQuery } from '../src/nextStepFacts.ts';
 import { matchingListings, searchListings } from '../server/product-search.mjs';
 import { createHandler } from '../server/hosted-product-search.mjs';
+import { fetchRetailerEndpoint, retailerConfigUrl, retailerOverride } from '../src/retailerEndpoint.ts';
 
 test('product search prioritizes literal OCR model codes and excludes account text', () => {
   const ocr = 'Premium Noise Cancelling Headphones\nYour orders\nShop by brand\nSony WH-1000XM5\nname@example.com\n$399.00';
@@ -91,4 +96,37 @@ test('hosted product search validates input before using the daily budget and pa
   available = false;
   assert.equal((await handler(event)).statusCode, 429);
   assert.equal(calls, 1);
+});
+
+test('release retailer search ignores a development loopback override', () => {
+  const localhost = 'http://127.0.0.1:8787/product-search';
+  assert.equal(retailerOverride(localhost, true), localhost);
+  assert.equal(retailerOverride(localhost, false), null);
+  assert.equal(retailerOverride('https://test.example/product-search', false), 'https://test.example/product-search');
+  assert.equal(retailerOverride('https://user:pass@host.example/', false), null);
+});
+
+test('landing packages only the public retailer URL and the app accepts the hosted configuration', async () => {
+  const folder = await mkdtemp(join(tmpdir(), 'nimby-product-config-'));
+  const endpoint = 'https://sample1234.execute-api.us-east-1.amazonaws.com/product-search';
+  try {
+    const output = join(folder, 'site');
+    execFileSync(process.execPath, ['landing/build-demo.mjs', output], {
+      env: { ...process.env, NIMBY_HOSTED_PRODUCT_SEARCH_URL: endpoint, TAVILY_API_KEY: 'server-only-test-key' },
+    });
+    const config = await readFile(join(output, 'product-search.json'), 'utf8');
+    assert.deepEqual(JSON.parse(config), { version: 1, endpoint });
+    assert.match(await readFile(join(output, 'index.html'), 'utf8'), /Try test checkout/);
+
+    const signal = new AbortController().signal;
+    assert.equal(await fetchRetailerEndpoint(signal, async (url, options) => {
+      assert.equal(url, retailerConfigUrl);
+      assert.deepEqual(options, { signal });
+      return new Response(config);
+    }), endpoint);
+    for (const invalid of [null, 'https://third-party.test/product-search', endpoint + '?token=secret', 'http://127.0.0.1:8787/product-search']) {
+      assert.equal(await fetchRetailerEndpoint(signal, async () => Response.json({ version: 1, endpoint: invalid })), null);
+    }
+    assert.equal(await fetchRetailerEndpoint(signal, async () => new Response(null, { status: 404 })), null);
+  } finally { await rm(folder, { recursive: true, force: true }); }
 });

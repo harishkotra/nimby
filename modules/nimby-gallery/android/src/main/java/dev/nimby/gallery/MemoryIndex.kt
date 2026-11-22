@@ -17,7 +17,7 @@ internal const val OCR_ELIGIBLE = """(images.kind IN ('screenshot','receipt','do
 internal fun createMemorySchema(db: SQLiteDatabase) {
     db.execSQL("""CREATE TABLE memory_details (
         image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
-        ocr_text TEXT, place TEXT
+        ocr_text TEXT, place TEXT, qwen_tags TEXT
     )""")
     db.execSQL("""CREATE TABLE photo_locations (
         uri TEXT PRIMARY KEY REFERENCES sources(uri) ON DELETE CASCADE,
@@ -31,13 +31,25 @@ internal fun createMemorySchema(db: SQLiteDatabase) {
     db.execSQL("""CREATE VIRTUAL TABLE memory_search USING fts4(
         labels, text, place, collection, tokenize=unicode61, prefix='2,3'
     )""")
+    installMemorySearchTriggers(db, populate = true)
+}
+
+internal fun addQwenSearchTags(db: SQLiteDatabase) {
+    db.execSQL("ALTER TABLE memory_details ADD COLUMN qwen_tags TEXT")
+    val triggers = listOf("memory_image_insert", "memory_image_update", "memory_image_delete",
+        "memory_details_insert", "memory_details_update", "memory_details_delete")
+    for (trigger in triggers) db.execSQL("DROP TRIGGER $trigger")
+    installMemorySearchTriggers(db, populate = false)
+}
+
+private fun installMemorySearchTriggers(db: SQLiteDatabase, populate: Boolean) {
     val insert = """INSERT INTO memory_search(docid, labels, text, place, collection)
         SELECT images.id, replace(COALESCE(images.kind, '') || ' ' || COALESCE(images.category, '') ||
-            ' ' || COALESCE(images.tags, ''), '_', ' '), COALESCE(details.ocr_text, ''),
+            ' ' || COALESCE(images.tags, '') || ' ' || COALESCE(details.qwen_tags, ''), '_', ' '), COALESCE(details.ocr_text, ''),
             COALESCE(details.place, ''), COALESCE(images.collection, '')
         FROM images LEFT JOIN memory_details details ON details.image_id = images.id
         WHERE images.status = 'complete'"""
-    db.execSQL(insert)
+    if (populate) db.execSQL(insert)
     db.execSQL("""CREATE TRIGGER memory_image_insert AFTER INSERT ON images
         BEGIN $insert AND images.id = NEW.id; END""")
     db.execSQL("""CREATE TRIGGER memory_image_update AFTER UPDATE OF status, kind, category, tags, collection ON images

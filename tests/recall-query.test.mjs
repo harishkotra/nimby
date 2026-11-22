@@ -36,6 +36,18 @@ test('handles named month and exact date ranges', () => {
   assert.equal(date.date?.end, new Date(2024, 2, 1).getTime());
 });
 
+test('treats Singapore Jan as a January search, keeping the place for offline lookup', () => {
+  assert.deepEqual(parseRecallQuery('Singapore Jan', now), {
+    terms: 'Singapore', date: { start: null, end: null, month: 1, label: 'January' }, category: null, place: null, textOnly: false,
+  });
+  assert.deepEqual(parseRecallQuery('Singapore Jan', now, ['Singapore']), {
+    terms: '', date: { start: null, end: null, month: 1, label: 'January' }, category: null, place: 'Singapore', textOnly: false,
+  });
+  assert.deepEqual(parseRecallQuery('wedding in Singapore Sept.', now).placeHint, { name: 'Singapore', terms: 'wedding' });
+  assert.equal(parseRecallQuery('Singapore Jan. 2024', now).date?.start, new Date(2024, 0, 1).getTime());
+  assert.equal(parseRecallQuery('May I find a receipt?', now).date, null);
+});
+
 test('calendar months and weeks cross year boundaries', () => {
   const january = new Date(2025, 0, 1);
   assert.equal(recallDateRange('Last month', january)?.start, new Date(2024, 11, 1).getTime());

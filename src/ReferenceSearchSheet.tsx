@@ -4,11 +4,11 @@ import { ActionSheet } from './ActionSheet';
 import { native, type Result } from './gallery';
 import { PhotoTile } from './PhotoGrid';
 import { ReadingStatus } from './ReadingStatus';
-import { visionSceneTerms } from './recallQuery';
+import { visionSceneTerms, type VisualSearchOptions } from './recallQuery';
 import { ActionLink, Body, Chip, ErrorText, Heading, styles, Thumbnail } from './ui';
 
-export function ReferenceSearchSheet({ uri, close, open, search }: {
-  uri: string; close: () => void; open: (photo: Result) => void; search: (query: string) => void;
+export function ReferenceSearchSheet({ uri, scope, scopeLabel, close, open, search }: {
+  uri: string; scope: VisualSearchOptions; scopeLabel: string; close: () => void; open: (photo: Result) => void; search: (query: string) => void;
 }) {
   const [matches, setMatches] = useState<Result[] | null>(null);
   const [terms, setTerms] = useState<string[] | null>(null);
@@ -19,10 +19,11 @@ export function ReferenceSearchSheet({ uri, close, open, search }: {
 
   useEffect(() => {
     let active = true;
-    native?.searchReferencePhoto?.(uri).then((results) => { if (active) setMatches(results); })
+    const request = native?.searchReferencePhotoScoped ? native.searchReferencePhotoScoped(uri, scope) : native?.searchReferencePhoto?.(uri);
+    request?.then((results) => { if (active) setMatches(results); })
       .catch((cause) => { if (active) setMatchError(cause instanceof Error ? cause.message : 'Could not compare this photo.'); });
     return () => { active = false; };
-  }, [uri]);
+  }, [uri, scope]);
 
   async function describe() {
     const read = native?.describeReferenceScene;
@@ -42,6 +43,7 @@ export function ReferenceSearchSheet({ uri, close, open, search }: {
           <Body>Nimby looks for a similar scene, layout, or style on this phone. It doesn’t identify people.</Body>
         </View>
       </View>
+      {!!native?.searchReferencePhotoScoped && !!scopeLabel && <Body>Searching {scopeLabel}</Body>}
       {!!matchError && <ErrorText>{matchError}</ErrorText>}
       {!matches && !matchError && <ReadingStatus label="Looking for similar photos" />}
       {matches && (matches.length ? <View style={layout.grid}>

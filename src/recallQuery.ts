@@ -1,18 +1,30 @@
 import type { Result } from './gallery';
 
 export type RecallPage = {
-  items: { photo: Result; captured: number | null; evidence: string[]; place: string | null }[];
+  items: { photo: Result; captured: number | null; evidence: string[]; place: string | null; matchKind?: 'visual' }[];
   next: number | null;
+  photoLocationsNeeded?: boolean;
 };
 
-export type RecallSearch = (
+export type LegacyRecallSearch = (
   query: string, category: string | null, start: number | null, end: number | null,
   place: string | null, collection: string | null, textOnly: boolean, offset: number,
 ) => Promise<RecallPage>;
+export type RecallSearch = (request: RecallRequest, offset: number) => Promise<RecallPage>;
+export type RecallSource = 'gallery' | 'picker';
+export type VisualSearchOptions = {
+  start: number | null; end: number | null; month: number | null; place: string | null; source: RecallSource | null;
+};
+export type RecallSearchOptions = {
+  terms: string; category: string | null; start: number | null; end: number | null; month: number | null;
+  place: string | null; placeHint?: { name: string; terms: string }; textOnly: boolean; source?: RecallSource | null;
+};
 
-export type RecallStatus = { pending: number; running: boolean };
-export type RecallDate = { start: number; end: number; label: string };
-export type RecallRequest = { terms: string; category: string | null; date: RecallDate | null; place: string | null; textOnly: boolean };
+export type RecallStatus = { pending: number; locationsEnabled?: boolean; locationsPending?: number; running: boolean };
+export type RecallDate = { start: number; end: number; label: string; month?: never } |
+  { start: null; end: null; label: string; month: number };
+export type RecallRequest = { terms: string; category: string | null; date: RecallDate | null; place: string | null;
+  placeHint?: RecallSearchOptions['placeHint']; textOnly: boolean; source?: RecallSource | null };
 
 export const emptyRecallRequest: RecallRequest = {
   terms: '', category: null, date: null, place: null, textOnly: false,
@@ -35,8 +47,10 @@ const categoryWords: [RegExp, (typeof recallCategories)[number]][] = [
 const monthNames = [
   'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December',
 ];
-const months = monthNames.map((name) => name.length > 3 ? `${name.slice(0, 3)}(?:${name.slice(3)})?` : name).join('|');
-const datedMonth = new RegExp(`\\b(?:(?:in|during|from)\\s+)?(${months})\\s+((?:19|20)\\d{2})\\b`, 'i');
+const months = monthNames.map((name) => name === 'September' ? 'Sep(?:t(?:ember)?)?' :
+  name.length > 3 ? `${name.slice(0, 3)}(?:${name.slice(3)})?` : name).join('|');
+const datedMonth = new RegExp(`\\b(?:(?:in|during|from)\\s+)?(${months})\\.?\\s+((?:19|20)\\d{2})\\b`, 'i');
+const bareMonth = new RegExp(`\\b(?:(?:in|during|from)\\s+(${months})\\b\\.?|(${months})\\b\\.?(?=[\\s,?!]*$))`, 'i');
 const isoDate = /\b(?:(?:on|from)\s+)?((?:19|20)\d{2})-(\d{2})-(\d{2})\b/i;
 const datedYear = /\b(?:in|during|from)\s+((?:19|20)\d{2})\b/i;
 const relativeDate = /\b(?:(?:from|in|on|during)\s+)?(today|yesterday|(?:this|last) (?:week|month|year))\b/i;
@@ -92,6 +106,11 @@ function findDate(query: string, now: Date): { range: RecallDate; matched: strin
     const year = Number(annual[1]);
     return { range: { start: new Date(year, 0, 1).getTime(), end: new Date(year + 1, 0, 1).getTime(), label: String(year) }, matched: annual[0] };
   }
+  const standalone = query.match(bareMonth);
+  if (standalone) {
+    const month = monthNames.findIndex((name) => name.toLowerCase().startsWith((standalone[1] ?? standalone[2]).toLowerCase()));
+    return { range: { start: null, end: null, label: monthNames[month], month: month + 1 }, matched: standalone[0] };
+  }
   return null;
 }
 
@@ -119,12 +138,12 @@ export function visionSceneTerms(reply: string): string[] {
 
 export function parseRecallQuery(query: string, now = new Date(), savedPlaces: readonly string[] = []): RecallRequest {
   let terms = query.trim().slice(0, 256);
+  const location = terms.match(/\bplace:\s*(?:"([^"]{1,80})"|([^\s,"]{1,80}))/i);
+  if (location) terms = terms.replace(location[0], ' ');
   const date = findDate(terms, now);
   if (date) terms = terms.replace(date.matched, ' ');
-  const location = terms.match(/\bplace:\s*(?:"([^"]{1,80})"|([^\s,"]{1,80}))/i);
   const remembered = location ? null : namedPlace(terms, savedPlaces);
-  const locationPhrase = location?.[0] ?? remembered?.match;
-  if (locationPhrase) terms = terms.replace(locationPhrase, ' ');
+  if (remembered) terms = terms.replace(remembered.match, ' ');
 
   let category: string | null = null;
   for (const [pattern, name] of categoryWords) {
@@ -135,15 +154,22 @@ export function parseRecallQuery(query: string, now = new Date(), savedPlaces: r
   }
   const textOnly = /\b(?:with text|containing text)\b/i.test(terms);
   terms = terms.replace(/\b(?:with text|containing text)\b/i, ' ')
-    .replace(/\b(?:in the background|as (?:the|a) backdrop|in (?:the|a) scene)\b/gi, ' ')
-    .replace(/^\s*(?:please\s+)?(?:show me|find|look for|where are|do i have)\b/i, '')
-    .replace(/\b(?:my|me|please|photos?|pictures?|images?|from|in|on|at|with|of|the|a|an)\b/gi, ' ')
-    .replace(/[?!]+$/, '')
-    .replace(/\s+/g, ' ').trim();
-
-  return { terms, category, date: date?.range ?? null, place: (location?.[1] ?? location?.[2] ?? remembered?.place)?.trim() || null, textOnly };
+    .replace(/\b(?:in the background|as (?:the|a) backdrop|in (?:the|a) scene)\b/gi, ' ');
+  const clean = (value: string) => value.replace(/^\s*(?:please\s+)?(?:show me|find|look for|where are|do i have)\b/i, '')
+    .replace(/\b(?:my|me|please|photos?|pictures?|images?|from|in|on|at|near|with|of|the|a|an|during)\b/gi, ' ')
+    .replace(/[\s,?!]+$/g, '').replace(/\s+/g, ' ').trim();
+  const explicitPlace = (location?.[1] ?? location?.[2] ?? remembered?.place)?.trim();
+  const text = clean(terms);
+  const savedPlace = savedPlaces.find((name) => name.toLocaleLowerCase() === text.toLocaleLowerCase());
+  const place = explicitPlace || savedPlace || null;
+  const trailingPlace = !place ? /\b(?:in|at|near|from)\s+([^,?!]{1,80}?)[\s,?!]*$/i.exec(terms) : null;
+  const placeHint = trailingPlace && trailingPlace.index != null && {
+    name: trailingPlace[1].trim(), terms: clean(terms.slice(0, trailingPlace.index)),
+  };
+  return { terms: !explicitPlace && savedPlace ? '' : text, category, date: date?.range ?? null, place,
+    ...(placeHint ? { placeHint } : {}), textOnly };
 }
 
 export function hasRecallRequest(request: RecallRequest): boolean {
-  return Boolean(request.terms || request.category || request.date || request.place || request.textOnly);
+  return Boolean(request.terms || request.category || request.date || request.place || request.textOnly || request.source);
 }

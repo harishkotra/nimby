@@ -44,6 +44,28 @@ test('distant GPS and different known places separate adjacent photos', () => {
   ]);
 });
 
+test('similar scenes can suggest a moment and stay distinct from burst links', () => {
+  const photos = [
+    candidate('table', 0, { sceneRelated: ['shelves'], aesthetic: .8 }, { kind: 'photo' }),
+    candidate('shelves', 1.5, { aesthetic: .7 }, { kind: 'photo' }),
+  ];
+  const [suggested] = buildEvents(photos);
+  assert.deepEqual(suggested.items.map(({ photo }) => photo.id), ['table', 'shelves']);
+  assert.deepEqual(suggested.reasons, ['Eye found similar scenes']);
+  assert.equal(pickEventHighlights(suggested.items).length, 2);
+  const stored = parseCorrections(JSON.stringify(renameEvent(emptyCorrections, suggested, 'Bookshop')));
+  assert.equal(buildEvents(photos, stored)[0].confirmed, true);
+  assert.equal(buildEvents(photos, stored)[0].title, 'Bookshop');
+});
+
+test('scene links require supporting time or location and respect conflicting places', () => {
+  const first = candidate('one', 0, { place: 'Office', sceneRelated: ['two'] });
+  assert.equal(buildEvents([first, candidate('two', 1.5, { place: 'Station' })]).length, 2);
+  assert.equal(buildEvents([first, candidate('two', 5)]).length, 2);
+  const [related] = buildEvents([first, candidate('two', 5, { place: 'Office' })]);
+  assert.ok(related.reasons.includes('Share a saved place') && related.reasons.includes('Eye found similar scenes'));
+});
+
 test('ignores invalid, duplicate, dismissed and inaccessible results', () => {
   const photos = [
     candidate('duplicate', 0), candidate('duplicate', .5),

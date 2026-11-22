@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useArchiveConfirmation } from './ArchiveScreen';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ActionMenu, ActionSheet } from './ActionSheet';
 import { ImageViewer } from './ImageViewer';
 import { PhotoGrid, PhotoTile } from './PhotoGrid';
+import { QwenTagsSheet } from './QwenTagsSheet';
+import { ScanResultMap, type ScanMapSelection } from './ScanResultMap';
 import { native, type Decision, type Feed, type Result, type ReviewCategory } from './gallery';
-import { Body, Button, Chip, IconButton, color, EmptyState, ErrorText, Heading, Icon, percent, styles, Thumbnail, titleCase, useReducedMotion } from './ui';
+import { ActionLink, Body, Button, Chip, IconButton, color, EmptyState, ErrorText, Heading, Icon, percent, styles, Thumbnail, titleCase, useReducedMotion } from './ui';
 
 type ReviewMode = Feed | 'scan';
 
@@ -24,21 +26,25 @@ export function Revisit({ revision, open, openCategory, openMode, browsing, togg
   const [categoryError, setCategoryError] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [seen, setSeen] = useState<string[]>([]);
+  const [more, setMore] = useState(false);
+  const daily = !!native?.dailyDiscoveries;
 
-  function refreshPicks(nextSeen = seen) {
+  function refreshPicks(nextSeen = seen, showMore = more) {
     setPicks(null);
     setSeen(nextSeen);
+    setMore(showMore);
     setRefresh((value) => value + 1);
   }
 
   useEffect(() => {
     let live = true;
     setError(false);
-    native?.revisitPicks(seen).then((next) => {
-      if (live) setPicks((previous) => previous == null ? next : previous.filter((photo) => next.some((item) => item.id === photo.id)));
+    const load = !more ? native?.dailyDiscoveries?.() : null;
+    (load ?? native?.revisitPicks(seen))?.then((next) => {
+      if (live) setPicks(next);
     }).catch(() => { if (live) setError(true); });
     return () => { live = false; };
-  }, [revision, refresh, seen]);
+  }, [revision, refresh, seen, more]);
 
   useEffect(() => {
     if (!browsing) return;
@@ -52,37 +58,45 @@ export function Revisit({ revision, open, openCategory, openMode, browsing, togg
   const lead = picks?.[0];
   return <ScrollView contentContainerStyle={styles.content}>
     <View style={layout.intro}>
-      <Heading large>Worth revisiting</Heading>
-      <Body>A few saved photos to come back to</Body>
+      <Heading large>{daily ? 'Daily discoveries' : 'Worth revisiting'}</Heading>
+      <Body>{daily && !more ? 'A short list from your gallery, refreshed each day.' : 'A few saved photos to come back to.'}</Body>
+      {daily && more && <ActionLink label="Back to today’s picks" run={() => refreshPicks([], false)} />}
     </View>
     {error ? <View style={layout.intro}><ErrorText>Could not load picks.</ErrorText>
       <Button label="Try again" subtle run={() => refreshPicks()} /></View> :
       picks == null ? <ActivityIndicator color={color.blue} /> :
       lead ? <View style={layout.pickStack}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Review ${lead.category || lead.name}`}
+        <Pressable accessibilityRole="button" accessibilityLabel={[`Review ${lead.category || lead.name}`, lead.discoveryReason].filter(Boolean).join('. ')}
           onPress={() => open(lead)} style={({ pressed }) => [layout.pickLead, pressed && styles.faded]}>
           <Thumbnail uri={lead.uri} contain style={layout.pickImage} />
           <View style={layout.pickCaption}>
-            <Text style={layout.sheetName}>{lead.category ?? 'Saved reference'}</Text>
+            <View style={layout.pickText}>
+              <Text style={layout.pickName}>{lead.category ?? 'Saved reference'}</Text>
+              {lead.discoveryReason && <Body>{lead.discoveryReason}</Body>}
+            </View>
             <Icon name="chevron" size={18} tint={color.muted} />
           </View>
         </Pressable>
         {picks.slice(1).map((photo) => <Pressable key={photo.id} accessibilityRole="button"
-          accessibilityLabel={`Review ${photo.category || photo.name}`} onPress={() => open(photo)}
+          accessibilityLabel={[`Review ${photo.category || photo.name}`, photo.discoveryReason].filter(Boolean).join('. ')} onPress={() => open(photo)}
           style={({ pressed }) => [layout.pickRow, pressed && styles.faded]}>
           <Thumbnail uri={photo.uri} style={layout.pickThumb} />
-          <Text style={layout.sheetName}>{photo.category ?? 'Saved reference'}</Text>
+          <View style={layout.pickText}>
+            <Text style={layout.pickName}>{photo.category ?? 'Saved reference'}</Text>
+            {photo.discoveryReason && <Body>{photo.discoveryReason}</Body>}
+          </View>
           <Icon name="chevron" size={18} tint={color.muted} />
         </Pressable>)}
         <Pressable accessibilityRole="button" style={styles.textAction}
-          onPress={() => refreshPicks([...seen, ...picks.map((item) => item.id)].slice(-96))}>
-          <Text style={styles.link}>Show different picks</Text>
+          onPress={() => refreshPicks([...seen, ...picks.map((item) => item.id)].slice(-96), true)}>
+          <Text style={styles.link}>{daily && !more ? 'Browse more picks' : 'Show different picks'}</Text>
           <Icon name="chevron" size={18} tint={color.muted} />
         </Pressable>
       </View> : <View style={layout.intro}>
-        <Heading>No picks in this set</Heading>
+        <Heading>{daily && !more ? 'No daily picks right now' : 'No picks in this set'}</Heading>
         <View style={styles.row}>
-          <Button label={seen.length ? 'Start over' : 'Check for picks'} subtle run={() => refreshPicks([])} />
+          {daily && !more ? <ActionLink label="Browse more picks" run={() => refreshPicks([], true)} /> :
+            <Button label={seen.length ? 'Start over' : 'Check for picks'} subtle run={() => refreshPicks([])} />}
         </View>
       </View>}
     <View style={layout.library}>
@@ -111,69 +125,24 @@ export function Revisit({ revision, open, openCategory, openMode, browsing, togg
   </ScrollView>;
 }
 
-function ScanCategories({ revision, scanId, openCategory }: {
-  revision: number; scanId: string; openCategory: (name: string) => void;
-}) {
-  const [categories, setCategories] = useState<ReviewCategory[] | null>(null);
-  const [error, setError] = useState(false);
-  const [retry, setRetry] = useState(0);
+type ReviewProps = {
+  revision: number; open: (item: Result) => void; mode: ReviewMode; category: string | null; scanId: string | null;
+  changed: () => void; openCategory: (name: string | null) => void; summary?: ReactNode;
+};
 
-  useEffect(() => {
-    let live = true;
-    setError(false);
-    native?.reviewCategories(scanId).then((groups) => { if (live) setCategories(groups); })
-      .catch(() => { if (live) setError(true); });
-    return () => { live = false; };
-  }, [scanId, revision, retry]);
-
-  const count = categories?.reduce((total, item) => total + item.count, 0);
-  return <ScrollView contentContainerStyle={styles.content}>
-    <View style={layout.intro}>
-      <Heading large>Scan results</Heading>
-      {count ? <Body>{count.toLocaleString()} {count === 1 ? 'photo' : 'photos'} in {categories!.length} {categories!.length === 1 ? 'category' : 'categories'}</Body> : null}
-    </View>
-    {error ? <View style={layout.intro}>
-      <ErrorText>Could not load categories.</ErrorText>
-      <Button label="Try again" subtle run={() => setRetry((value) => value + 1)} />
-    </View> : categories == null ? <ActivityIndicator color={color.blue} /> :
-      categories.length === 0 ? <EmptyState icon="gallery" mascot="resting"
-        title="No results to show" text="This scan has no available analyzed photos to review."  /> :
-      <View style={layout.sheets}>
-        {categories.map(({ name, count: groupCount, previews }) => <Pressable key={name}
-          accessibilityRole="button" accessibilityLabel={`${titleCase(name)}, ${groupCount} photos`}
-          onPress={() => openCategory(name)} style={({ pressed }) => [layout.sheetCard, pressed && styles.faded]}>
-          {!!previews.length && <View style={layout.contactSheet} importantForAccessibility="no-hide-descendants">
-            {previews.map((uri, index) => <Thumbnail key={`${uri}-${index}`} uri={uri} style={layout.contactPhoto} />)}
-          </View>}
-          <View style={layout.sheetLabel}>
-            <Text style={layout.sheetName}>{titleCase(name)}</Text>
-            <Text style={layout.sheetCount}>{groupCount.toLocaleString()}</Text>
-            <Icon name="chevron" size={16} tint={color.muted} />
-          </View>
-        </Pressable>)}
-      </View>}
-  </ScrollView>;
+export function Discover(props: ReviewProps) {
+  const { mode, scanId, category } = props;
+  return <ReviewPhotos key={JSON.stringify([mode, scanId, category])} {...props} />;
 }
 
-export function Discover({ revision, open, mode, category, scanId, changed, openCategory }: {
-  revision: number; open: (item: Result) => void; mode: ReviewMode; category: string | null; scanId: string | null;
-  changed: () => void; openCategory: (name: string | null) => void;
-}) {
-  if (category == null && mode === 'scan' && scanId) {
-    return <ScanCategories revision={revision} scanId={scanId} openCategory={openCategory} />;
-  }
-  return <ReviewPhotos key={JSON.stringify([mode, scanId, category])} revision={revision} open={open}
-    mode={mode} category={category} scanId={scanId} changed={changed} openCategory={openCategory} />;
-}
-
-function ReviewPhotos({ revision, open, mode, category, scanId, changed, openCategory }: {
-  revision: number; open: (item: Result) => void; mode: ReviewMode; category: string | null; scanId: string | null;
-  changed: () => void; openCategory: (name: string | null) => void;
-}) {
+function ReviewPhotos({ revision, open, mode, category, scanId, changed, openCategory, summary }: ReviewProps) {
   const confirmArchive = useArchiveConfirmation();
   const [groups, setGroups] = useState<string[]>([]);
   const [results, setResults] = useState<Result[]>([]);
-  const [more, setMore] = useState(false);
+  const [next, setNext] = useState<number | null>(null);
+  const [scanCategories, setScanCategories] = useState<ReviewCategory[]>([]);
+  const [mapSelection, setMapSelection] = useState<ScanMapSelection | null>(null);
+  const clearMapSelection = useCallback(() => setMapSelection(null), []);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selection, setSelection] = useState<Set<string> | null>(null);
@@ -187,13 +156,15 @@ function ReviewPhotos({ revision, open, mode, category, scanId, changed, openCat
     loadingRef.current = true;
     setLoading(true);
     setError('');
-    const page = mode === 'scan'
-      ? (scanId ? native.scanFeed(scanId, category, offset, 24) : Promise.resolve([]))
-      : native.feed(mode, category, offset, 24);
-    page.then((items) => {
+    const page = scanId && mapSelection && native.scanMapPhotoPage
+      ? native.scanMapPhotoPage(scanId, mapSelection.zoom, mapSelection.id, offset)
+      : (mode === 'scan' && scanId ? native.scanFeed(scanId, category, offset, 24) :
+        mode === 'scan' ? Promise.resolve([]) : native.feed(mode, category, offset, 24))
+        .then((photos) => ({ photos, nextOffset: photos.length === 24 ? offset + photos.length : null }));
+    page.then(({ photos, nextOffset }) => {
       if (current !== request.current) return;
-      setResults((previous) => offset === 0 ? items : previous.concat(items));
-      setMore(items.length === 24);
+      setResults((previous) => offset === 0 ? photos : previous.concat(photos));
+      setNext(nextOffset);
     }).catch(() => {
       if (current === request.current) setError('Could not load photos.');
     }).finally(() => {
@@ -208,11 +179,18 @@ function ReviewPhotos({ revision, open, mode, category, scanId, changed, openCat
     request.current++;
     loadingRef.current = false;
     setResults([]);
-    setMore(false);
+    setNext(null);
     setSelection(null);
     load(0);
     return () => { request.current++; };
-  }, [revision]);
+  }, [revision, mapSelection]);
+
+  useEffect(() => {
+    if (mode !== 'scan' || !scanId) return;
+    let live = true;
+    native?.reviewCategories(scanId).then((groups) => { if (live) setScanCategories(groups); }).catch(() => {});
+    return () => { live = false; };
+  }, [mode, revision, scanId]);
 
   useEffect(() => {
     if (mode !== 'kept') return;
@@ -232,9 +210,22 @@ function ReviewPhotos({ revision, open, mode, category, scanId, changed, openCat
 
   return <View style={layout.fill}>
     <PhotoGrid<Result> data={results} keyExtractor={(item) => item.sourceKey ?? item.id} extraData={selection}
-      onEndReached={() => { if (more) load(results.length); }} onEndReachedThreshold={0.5}
+      onEndReached={() => { if (next !== null && !error) load(next); }} onEndReachedThreshold={0.5}
       ListHeaderComponent={<View style={layout.galleryHeader}>
-        <Heading large>{category ? titleCase(category) : titles[mode]}</Heading>
+        {summary}
+        {mode === 'scan' && scanId && category === null && <ScanResultMap scanId={scanId} revision={revision}
+          select={setMapSelection} clear={clearMapSelection} />}
+        <View style={styles.between}>
+          <Heading large={mode !== 'scan'}>{mapSelection ? 'Photos in this area' : category ? titleCase(category) : titles[mode]}</Heading>
+          {mapSelection ? <ActionLink label="All scan photos" run={clearMapSelection} /> :
+            mode === 'scan' && (category !== null || scanCategories.length > 1) &&
+              <ActionMenu title="Scan categories" label="Categories" options={[
+                { label: 'All photos', selected: category === null, run: () => openCategory(null) },
+                ...scanCategories.map(({ name, count }) => ({
+                  label: `${titleCase(name)} · ${count.toLocaleString()}`, selected: name === category, run: () => openCategory(name),
+                })),
+              ]} />}
+        </View>
         {selection && <View style={styles.between}>
           <Body>{selection.size.toLocaleString()} selected</Body>
           <Pressable accessibilityRole="button" style={styles.textAction} onPress={() => {
@@ -253,7 +244,7 @@ function ReviewPhotos({ revision, open, mode, category, scanId, changed, openCat
       ListEmptyComponent={!loading && !error ? <EmptyState icon="gallery" mascot={mode === 'kept' ? 'happy' : 'discovering'} title="No photos here"
         text={mode === 'kept' ? 'Keep a photo to find it here later.' : 'Photos in this view may have been archived or become unavailable.'} /> : undefined}
       ListFooterComponent={loading ? <ActivityIndicator color={color.blue} /> :
-        error ? <Button label="Try again" subtle run={() => load(results.length)} /> : undefined}
+        error ? <Button label="Try again" subtle run={() => load(next ?? 0)} /> : undefined}
       renderTile={(item) => <PhotoTile uri={item.uri} label={item.name} fade={reduced ? 0 : 120}
         selected={selection && item.uri ? selection.has(item.uri) : undefined}
         longPress={item.uri ? () => toggle(item.uri!) : undefined}
@@ -281,6 +272,7 @@ export function PhotoDetail({ item, close, changed, open }: {
   const [name, setName] = useState(item.collection ?? '');
   const [modelDetails, setModelDetails] = useState(false);
   const [placeName, setPlaceName] = useState<string | null>(null);
+  const [showSearchTags, setShowSearchTags] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -367,6 +359,7 @@ export function PhotoDetail({ item, close, changed, open }: {
             } },
             { label: 'Organize into a collection', run: organize },
             { label: 'Edit place name', run: () => void openPlaceEditor() },
+            ...(photo.uri && native?.suggestQwenTags ? [{ label: 'Search tags', run: () => setShowSearchTags(true) }] : []),
             ...(kept ? [{ label: 'Undo keep', run: () => void decide('new') }] : []),
             ...(photo.decision !== 'dismissed' ? [{ label: 'Dismiss suggestion', run: () => void decide('dismissed') }] : []),
             ...(photo.uri ? [
@@ -405,6 +398,7 @@ export function PhotoDetail({ item, close, changed, open }: {
         </>}
       </View>}
     </ImageViewer>
+    {showSearchTags && <QwenTagsSheet photo={photo} close={() => setShowSearchTags(false)} changed={changed} />}
     {placeName != null && <ActionSheet title="Place name" close={() => { if (!busy) { setPlaceName(null); setError(''); } }}
       footer={<Button label="Save place" run={() => void savePlace()} disabled={busy} />}>
       <View style={styles.column}>
@@ -445,17 +439,14 @@ const layout = StyleSheet.create({
   pickLead: { backgroundColor: color.white, borderRadius: 16, overflow: 'hidden' },
   pickImage: { aspectRatio: 1.4, backgroundColor: color.black },
   pickCaption: { flexDirection: 'row', gap: 12, alignItems: 'center', minHeight: 56, paddingHorizontal: 16 },
+  pickText: { flex: 1, gap: 2, paddingVertical: 8 },
+  pickName: { color: color.ink, fontSize: 16, fontWeight: '600' },
   pickRow: { flexDirection: 'row', gap: 12, alignItems: 'center', minHeight: 64, paddingHorizontal: 8,
     backgroundColor: color.white, borderRadius: 12 },
   pickThumb: { width: 48, height: 48, borderRadius: 8 },
   library: { borderTopWidth: StyleSheet.hairlineWidth, borderColor: color.rule },
   libraryRow: { flexDirection: 'row', gap: 16, alignItems: 'center', minHeight: 48 },
   galleryHeader: { gap: 12, paddingBottom: 8 },
-  sheets: { gap: 12 },
-  sheetCard: { borderRadius: 12, backgroundColor: color.white, overflow: 'hidden' },
-  contactSheet: { flexDirection: 'row', gap: 4, padding: 4, paddingBottom: 0 },
-  contactPhoto: { flexBasis: '32%', aspectRatio: 1.35, borderRadius: 8 },
-  sheetLabel: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 48, paddingHorizontal: 12, paddingVertical: 8 },
   sheetName: { flex: 1, fontSize: 16, fontWeight: '600', color: color.ink },
   sheetCount: { color: color.muted, fontSize: 14, fontVariant: ['tabular-nums'] },
   selectionBar: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, paddingHorizontal: 20,

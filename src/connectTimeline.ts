@@ -7,13 +7,14 @@ export type ConnectCandidate = {
   lat: number | null;
   lon: number | null;
   related: string[];
+  sceneRelated?: string[];
   aesthetic?: number | null;
   keeper?: number | null;
 };
 
 export type ConnectPage = { items: ConnectCandidate[]; truncated: boolean };
 
-type Match = 'time' | 'gps' | 'place' | 'visual';
+type Match = 'time' | 'gps' | 'place' | 'visual' | 'scene';
 type CorrectedEvent = { id: string; title: string; members: string[] };
 
 export type ConnectCorrections = { version: 1; nextId: number; groups: CorrectedEvent[] };
@@ -35,6 +36,7 @@ const reasons: Record<Match, string> = {
   gps: 'Taken at nearby locations',
   place: 'Share a saved place',
   visual: 'Eye found similar photos',
+  scene: 'Eye found similar scenes',
 };
 
 export const emptyCorrections: ConnectCorrections = { version: 1, nextId: 1, groups: [] };
@@ -120,6 +122,7 @@ export function buildEvents(input: ConnectCandidate[], corrections = emptyCorrec
   const ends = [...starts];
   const signals = items.map(() => new Set<Match>());
   const related = items.map((item) => new Set(item.related));
+  const scenes = items.map((item) => new Set(item.sceneRelated));
 
   function root(index: number): number {
     while (leaders[index] !== index) {
@@ -137,7 +140,8 @@ export function buildEvents(input: ConnectCandidate[], corrections = emptyCorrec
       if (gap > linkWindow) break;
       const aRoot = root(left);
       const bRoot = root(right);
-      if (aRoot === bRoot) continue;
+      const sceneNeighbor = scenes[left].has(b.photo.id) || scenes[right].has(a.photo.id);
+      if (aRoot === bRoot && !sceneNeighbor) continue;
       const start = Math.min(starts[aRoot], starts[bRoot]);
       const end = Math.max(ends[aRoot], ends[bRoot]);
       if (end - start > eventWindow) continue;
@@ -148,8 +152,15 @@ export function buildEvents(input: ConnectCandidate[], corrections = emptyCorrec
       const nearby = distance != null && distance <= 8;
       const samePlace = Boolean(aPlace && aPlace === bPlace);
       const visual = related[left].has(b.photo.id) || related[right].has(a.photo.id);
-      const close = gap <= 45 * 60 * 1000 && !(aPlace && bPlace && aPlace !== bPlace && !nearby);
-      if (!close && !nearby && !samePlace && !visual) continue;
+      const conflictingPlaces = aPlace && bPlace && aPlace !== bPlace && !nearby;
+      const close = gap <= 45 * 60 * 1000 && !conflictingPlaces;
+      const scene = !conflictingPlaces && sceneNeighbor &&
+        (gap <= 2 * HOUR || gap <= 6 * HOUR && (samePlace || (distance != null && distance <= 2)));
+      if (aRoot === bRoot) {
+        if (scene) signals[aRoot].add('scene');
+        continue;
+      }
+      if (!close && !nearby && !samePlace && !visual && !scene) continue;
       leaders[bRoot] = aRoot;
       starts[aRoot] = start;
       ends[aRoot] = end;
@@ -158,6 +169,7 @@ export function buildEvents(input: ConnectCandidate[], corrections = emptyCorrec
       if (nearby) signals[aRoot].add('gps');
       if (samePlace) signals[aRoot].add('place');
       if (visual) signals[aRoot].add('visual');
+      if (scene) signals[aRoot].add('scene');
     }
   }
 
